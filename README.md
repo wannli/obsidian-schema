@@ -46,7 +46,8 @@ Rules:
 - `folder` is the canonical folder for that type.
 - `field*` syntax marks required fields (example: `date*:`).
 - Scalar values with commas define string enums.
-- Arrays define defaults; multi-value arrays define array enums.
+- Arrays define array type; multi-value arrays define array enums.
+- `default.<field>` defines autofill default values (for missing fields).
 - `purpose` is human-readable schema intent.
 
 ## What `fix` Does
@@ -71,6 +72,49 @@ Vault scanning excludes:
 - `Templates/`
 - `.obsidian/`
 - `.base` files
+
+## Run On Save In Obsidian
+
+Yes, Obsidian can run JS on save via a plugin. This repo includes a minimal desktop plugin scaffold:
+
+- `/Users/wannli/Code/obsidian-typing/obsidian-plugin/schema-fix-on-save/manifest.json`
+- `/Users/wannli/Code/obsidian-typing/obsidian-plugin/schema-fix-on-save/main.js`
+
+Install it in your vault:
+
+1. Copy `obsidian-plugin/schema-fix-on-save` to `~/notes/.obsidian/plugins/schema-fix-on-save`.
+2. Enable the plugin in Obsidian community plugins.
+3. In plugin settings, confirm paths for `node`, `cli.mjs`, and report dir.
+
+Behavior:
+
+- Watches markdown file `modify` events.
+- Debounces runs to avoid repeated invocations while typing.
+- Skips excluded folders (`Attachments`, `Schemas`, `Templates` by default).
+- Runs `schema fix` in the background.
+
+## Mobile-Compatible Plugin
+
+For Obsidian mobile (no Node subprocess), this repo also includes:
+
+- `/Users/wannli/Code/obsidian-typing/obsidian-plugin/mobile-schema-typer/manifest.json`
+- `/Users/wannli/Code/obsidian-typing/obsidian-plugin/mobile-schema-typer/main.js`
+
+Behavior:
+
+- Loads schemas from `Schemas/*.md` in-vault.
+- Applies schema fixes on markdown changes.
+- Adds missing required fields (blank/default).
+- Infers `type` from schema folder mappings when missing.
+- Prepends `YYYY-MM-DD ` to note title when schema has `prependDateToTitle: true`.
+- Moves notes to schema `folder`.
+- Overrides folder to `Archive` when `status` is `done`, `superseded`, or `cancelled`.
+
+Install:
+
+1. Copy `mobile-schema-typer` into `<vault>/.obsidian/plugins/mobile-schema-typer`.
+2. Enable the plugin in Community Plugins.
+3. Optionally configure debounce/exclusions/folders in plugin settings.
 
 ## Default Starter Schemas
 

@@ -1,0 +1,8 @@
+{
+  "id": "mobile-schema-typer",
+  "name": "Mobile Schema Typer",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Schema-based note autofix and routing for Obsidian desktop and mobile.",
+  "author": "wannli"
+}

@@ -2,8 +2,10 @@
 folder: /Subjects
 type: subject
 purpose: Topic/area maps
-tags: []
-parent:
-children: []
-status: active,draft,paused,done,superseded,cancelled
+field.tags: []
+field.parent:
+field.children: []
+field.status: active,draft,paused,done,superseded,cancelled
+default.tags: []
+default.children: []
 ---

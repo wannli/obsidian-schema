@@ -2,8 +2,10 @@
 folder: /Projects
 type: project
 purpose: Projects and initiatives
-status*: active,draft,paused,done,superseded,cancelled
-tags: []
-parent:
-children: []
+field.status*: active,draft,paused,done,superseded,cancelled
+field.tags: []
+field.parent:
+field.children: []
+default.tags: []
+default.children: []
 ---

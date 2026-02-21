@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "runOnModify": true,
+  "debounceMs": 1200,
+  "schemasFolder": "Schemas",
+  "excludedFolders": ["Attachments", "Schemas", "Templates"],
+  "archiveFolder": "Archive",
+  "enableDatePrefixRename": true
+}

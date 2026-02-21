@@ -222,15 +222,41 @@ async function syncSchemaTypeKeyConvention(schemasDir) {
     const next = text
       .replace(/^(\s*field\.type)\*:/m, '$1:')
       .replace(/^(\s*type)\*:/m, '$1:')
-      .replace(/^(\s*)field\.type:/m, '$1type:');
+      .replace(/^(\s*)field\.type:/m, '$1type:')
+      .replace(/^(\s*extends:\s*)(.+)\s*$/gm, (_full, prefix, raw) => {
+        const normalized = normalizeExtendsValue(raw);
+        return `${prefix}${normalized}`;
+      });
     if (next !== text) {
       await fs.writeFile(fullPath, next, 'utf8');
     }
   }
 }
 
+function normalizeExtendsValue(raw) {
+  let trimmed = String(raw || '').trim();
+  if (!trimmed || /^null$/i.test(trimmed)) return trimmed || 'null';
+
+  // Strip one layer of YAML quotes.
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
+
+  // Collapse accidental single-item list syntax encoded inline.
+  let m = trimmed.match(/^\[\s*\[\[([^\]|#]+)\]\]\s*\]$/);
+  if (m) return `[[${m[1].trim()}]]`;
+
+  // Canonical wikilink form.
+  m = trimmed.match(/^\[\[([^\]|#]+)\]\]$/);
+  if (m) return `[[${m[1].trim()}]]`;
+
+  // Fallback: bare token -> wikilink.
+  return `[[${trimmed}]]`;
+}
+
 async function syncObservabilityBase({ vault, schemas }) {
-  const basePath = path.join(vault, 'Schema Observability.base');
+  const basePath = path.join(vault, 'Schema.base');
+  const legacyBasePath = path.join(vault, 'Schema Observability.base');
   const typeSchemas = schemas
     .filter((s) => s.discriminator === 'type')
     .sort((a, b) => String(a.id).localeCompare(String(b.id)));
@@ -249,13 +275,43 @@ async function syncObservabilityBase({ vault, schemas }) {
   lines.push('    displayName: Has Date');
   lines.push('views:');
   lines.push('  - type: table');
+  lines.push('    name: "Schema Issues"');
+  lines.push('    filters:');
+  lines.push('      and:');
+  pushBasePathExclusions(lines, '        ');
+  lines.push('        - or:');
+  lines.push('            - type == null');
+  lines.push('            - type == ""');
+  lines.push('            - and:');
+  lines.push('                - schema_notes != null');
+  lines.push('                - schema_notes != ""');
+
+  for (const schema of typeSchemas) {
+    const req = [...new Set((schema.required || []).filter((k) => k !== 'type'))];
+    if (req.length === 0) continue;
+    lines.push('            - and:');
+    lines.push(`                - type == ${yamlString(String(schema.id))}`);
+    lines.push('                - or:');
+    for (const field of req) {
+      lines.push(`                    - ${field} == null`);
+      lines.push(`                    - ${field} == ""`);
+    }
+  }
+  lines.push('    order:');
+  lines.push('      - file.name');
+  lines.push('      - type');
+  lines.push('      - schema_notes');
+  lines.push('      - status');
+  lines.push('      - date');
+
+  lines.push('  - type: table');
   lines.push('    name: "No Type"');
   lines.push('    filters:');
   lines.push('      and:');
   pushBasePathExclusions(lines, '        ');
   lines.push('        - type == null');
   lines.push('    order:');
-  lines.push('      - file.path');
+  lines.push('      - file.name');
   lines.push('      - type');
   lines.push('      - tags');
 
@@ -275,14 +331,18 @@ async function syncObservabilityBase({ vault, schemas }) {
       lines.push(`            - ${field} == ""`);
     }
     lines.push('    order:');
-    lines.push('      - file.path');
-    lines.push('      - type');
+    lines.push('      - file.name');
     for (const field of req) {
       lines.push(`      - ${field}`);
     }
   }
 
   await fs.writeFile(basePath, `${lines.join('\n')}\n`, 'utf8');
+  try {
+    await fs.unlink(legacyBasePath);
+  } catch {
+    // no-op
+  }
 }
 
 function pushBasePathExclusions(lines, indent) {
@@ -290,6 +350,9 @@ function pushBasePathExclusions(lines, indent) {
   lines.push(`${indent}- file.path.startsWith("Schemas/") == false`);
   lines.push(`${indent}- file.path.startsWith("Templates/") == false`);
   lines.push(`${indent}- file.path.endsWith(".base") == false`);
+  lines.push(`${indent}- file.path != "Schema.base"`);
+  lines.push(`${indent}- file.name != "Schema"`);
+  lines.push(`${indent}- file.name != "Schema.base"`);
 }
 
 async function syncOntologySummary({ vault, schemas }) {
@@ -807,23 +870,32 @@ function parseNativeMarkdownSchema(frontmatter, body) {
     'notes'
   ]);
   const schemaFolder = normalizeSchemaFolder(frontmatter.folder ?? frontmatter.appliesTo);
-  const prependDateToTitle = parseBoolLike(frontmatter.prependDateToTitle) === true;
+  const prependDateSetting = parseBoolLike(frontmatter.prependDateToTitle);
   const schema = {
     id: null,
     discriminator: null,
-    extends: typeof frontmatter.extends === 'string' ? frontmatter.extends.trim() : null,
+    extends: parseSimpleWikiLink(frontmatter.extends),
     purpose: typeof frontmatter.purpose === 'string' ? frontmatter.purpose.trim() : null,
-    prependDateToTitle,
+    prependDateToTitle: prependDateSetting === null ? undefined : prependDateSetting,
     folder: schemaFolder,
     required: [],
     properties: {}
   };
+  const explicitDefaults = new Map();
 
   for (const [rawKey, rawValue] of Object.entries(frontmatter)) {
     if (reserved.has(rawKey)) continue;
 
     const required = rawKey.endsWith('*');
     let key = required ? rawKey.slice(0, -1) : rawKey;
+
+    if (key.startsWith('default.')) {
+      const defaultKey = key.slice('default.'.length);
+      if (defaultKey && !defaultKey.includes('.')) {
+        explicitDefaults.set(defaultKey, cloneValue(rawValue));
+      }
+      continue;
+    }
 
     // Prefer namespaced schema keys to avoid polluting normal property values
     // in Obsidian property suggestions.
@@ -835,7 +907,7 @@ function parseNativeMarkdownSchema(frontmatter, body) {
     }
     if (!key) continue;
 
-    const prop = propertyFromSchemaValue(rawValue);
+    const prop = propertyFromSchemaValue(rawValue, { allowImplicitDefault: false });
     schema.properties[key] = prop;
     if (required) schema.required.push(key);
 
@@ -850,6 +922,15 @@ function parseNativeMarkdownSchema(frontmatter, body) {
           schema.id = rawValue.trim();
         }
       }
+    }
+  }
+
+  for (const [key, value] of explicitDefaults.entries()) {
+    if (!schema.properties[key]) {
+      schema.properties[key] = propertyFromDefaultValue(value);
+    }
+    if (value !== null) {
+      schema.properties[key].default = cloneValue(value);
     }
   }
 
@@ -869,6 +950,18 @@ function parseNativeMarkdownSchema(frontmatter, body) {
   return schema.id ? schema : null;
 }
 
+function isSimpleWikiLink(value) {
+  return /^\[\[[^\]|#]+\]\]$/.test(String(value || '').trim());
+}
+
+function parseSimpleWikiLink(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  const m = trimmed.match(/^\[\[([^\]|#]+)\]\]$/);
+  if (!m) return null;
+  return m[1].trim() || null;
+}
+
 function parseBoolLike(value) {
   const v = String(value || '').trim().toLowerCase();
   if (['true', 'yes', 'y', '1'].includes(v)) return true;
@@ -876,13 +969,14 @@ function parseBoolLike(value) {
   return null;
 }
 
-function propertyFromSchemaValue(rawValue) {
+function propertyFromSchemaValue(rawValue, options = {}) {
+  const allowImplicitDefault = Boolean(options.allowImplicitDefault);
   if (Array.isArray(rawValue)) {
     if (rawValue.length === 0) {
-      return { type: 'array', default: [] };
+      return allowImplicitDefault ? { type: 'array', default: [] } : { type: 'array' };
     }
     if (rawValue.length === 1) {
-      return { type: 'array', default: [rawValue[0]] };
+      return allowImplicitDefault ? { type: 'array', default: [rawValue[0]] } : { type: 'array' };
     }
     return { type: 'array', enum: rawValue };
   }
@@ -897,17 +991,30 @@ function propertyFromSchemaValue(rawValue) {
         .map((x) => parseScalar(x));
       return { type: 'string', enum: parts };
     }
-    return { type: inferPrimitiveType(parseScalar(trimmed)), default: parseScalar(trimmed) };
+    const parsed = parseScalar(trimmed);
+    return allowImplicitDefault
+      ? { type: inferPrimitiveType(parsed), default: parsed }
+      : { type: inferPrimitiveType(parsed) };
   }
 
   if (typeof rawValue === 'boolean' || typeof rawValue === 'number') {
-    return { type: inferPrimitiveType(rawValue), default: rawValue };
+    return allowImplicitDefault
+      ? { type: inferPrimitiveType(rawValue), default: rawValue }
+      : { type: inferPrimitiveType(rawValue) };
   }
 
   if (rawValue === null) {
     return { type: 'string' };
   }
 
+  return { type: 'string' };
+}
+
+function propertyFromDefaultValue(rawValue) {
+  if (Array.isArray(rawValue)) return { type: 'array' };
+  if (typeof rawValue === 'boolean') return { type: 'boolean' };
+  if (typeof rawValue === 'number') return { type: 'number' };
+  if (rawValue === null) return { type: 'string' };
   return { type: 'string' };
 }
 
@@ -1494,20 +1601,31 @@ function parseScalar(value) {
   const v = value.trim();
   if (v === '') return '';
 
+  // Preserve Obsidian wikilinks as strings (e.g. [[entity]]).
+  if (/^\[\[[^\]]+\]\]$/.test(v)) {
+    return v;
+  }
+
+  let unquoted = v;
   if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-    return v.slice(1, -1);
+    unquoted = v.slice(1, -1);
   }
 
-  if (v === 'true') return true;
-  if (v === 'false') return false;
-  if (v === 'null' || v === '~') return null;
-
-  if (/^-?\d+(\.\d+)?$/.test(v)) {
-    return Number(v);
+  // Preserve quoted wikilinks too (e.g. "[[entity]]").
+  if (/^\[\[[^\]]+\]\]$/.test(unquoted)) {
+    return unquoted;
   }
 
-  if (v.startsWith('[') && v.endsWith(']')) {
-    const inner = v.slice(1, -1).trim();
+  if (unquoted === 'true') return true;
+  if (unquoted === 'false') return false;
+  if (unquoted === 'null' || unquoted === '~') return null;
+
+  if (/^-?\d+(\.\d+)?$/.test(unquoted)) {
+    return Number(unquoted);
+  }
+
+  if (unquoted.startsWith('[') && unquoted.endsWith(']')) {
+    const inner = unquoted.slice(1, -1).trim();
     if (!inner) return [];
     return inner
       .split(',')
@@ -1515,7 +1633,7 @@ function parseScalar(value) {
       .map((x) => parseScalar(x));
   }
 
-  return v;
+  return unquoted;
 }
 
 function serializeMarkdown(body, frontmatter) {
