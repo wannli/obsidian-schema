@@ -1,0 +1,16 @@
+{
+  "name": "obsidian-typer",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Schema-based typing and autofix for Obsidian markdown vaults",
+  "bin": {
+    "schema": "src/cli.mjs"
+  },
+  "scripts": {
+    "schema": "node src/cli.mjs",
+    "schema:check": "node src/cli.mjs check --vault ~/notes",
+    "schema:fix": "node src/cli.mjs fix --vault ~/notes",
+    "schema:fix:dry": "node src/cli.mjs fix --vault ~/notes --dry-run"
+  }
+}
