@@ -29,12 +29,13 @@ Schemas are markdown files in your vault at `Schemas/*.md`, using Obsidian front
 ```md
 ---
 type: meeting
-extends: log
+extends: [[log]]
 folder: /Meetings
 purpose: Meeting notes
-date*:
-attendees: []
-status: active,draft,paused,done,superseded,cancelled
+field.date*:
+field.attendees: []
+field.status: active,draft,paused,done,superseded,cancelled
+default.attendees: []
 prependDateToTitle: true
 ---
 ```
@@ -42,9 +43,9 @@ prependDateToTitle: true
 Rules:
 
 - `type` identifies the schema.
-- `extends` inherits another schema.
+- `extends` inherits another schema and uses a simple wikilink (`[[entity]]`).
 - `folder` is the canonical folder for that type.
-- `field*` syntax marks required fields (example: `date*:`).
+- `field.<name>*` marks required fields (example: `field.date*:`).
 - Scalar values with commas define string enums.
 - Arrays define array type; multi-value arrays define array enums.
 - `default.<field>` defines autofill default values (for missing fields).
@@ -73,25 +74,13 @@ Vault scanning excludes:
 - `.obsidian/`
 - `.base` files
 
-## Run On Save In Obsidian
+## Centralized Runner
 
-Yes, Obsidian can run JS on save via a plugin. This repo includes a minimal desktop plugin scaffold:
+For centralized, out-of-Obsidian execution, run the CLI on your Mac (manually or via `launchd`):
 
-- `/Users/wannli/Code/obsidian-typing/obsidian-plugin/schema-fix-on-save/manifest.json`
-- `/Users/wannli/Code/obsidian-typing/obsidian-plugin/schema-fix-on-save/main.js`
-
-Install it in your vault:
-
-1. Copy `obsidian-plugin/schema-fix-on-save` to `~/notes/.obsidian/plugins/schema-fix-on-save`.
-2. Enable the plugin in Obsidian community plugins.
-3. In plugin settings, confirm paths for `node`, `cli.mjs`, and report dir.
-
-Behavior:
-
-- Watches markdown file `modify` events.
-- Debounces runs to avoid repeated invocations while typing.
-- Skips excluded folders (`Attachments`, `Schemas`, `Templates` by default).
-- Runs `schema fix` in the background.
+```bash
+node /Users/wannli/Code/obsidian-typing/src/cli.mjs fix --vault /Users/wannli/notes --report-dir /Users/wannli/Code/obsidian-typing/reports
+```
 
 ## Mobile-Compatible Plugin
 

@@ -1,9 +1,0 @@
-{
-  "id": "schema-fix-on-save",
-  "name": "Schema Fix On Save",
-  "version": "0.1.0",
-  "minAppVersion": "1.5.0",
-  "description": "Runs obsidian-typer CLI after markdown file saves.",
-  "author": "wannli",
-  "isDesktopOnly": true
-}
