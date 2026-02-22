@@ -1,10 +1,10 @@
 ---
-folder: /Dailies
 type: daily
-prependDateToTitle: true
 purpose: Daily journal/log
-date*:
+folder: /Dailies
+field.date*: ""
+field.status: "active,draft,paused,done,superseded,cancelled"
 field.tags: []
-field.status: active,draft,paused,done,superseded,cancelled
 default.tags: []
+prependDateToTitle: true
 ---

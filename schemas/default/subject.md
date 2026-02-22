@@ -1,11 +1,13 @@
 ---
-folder: /Subjects
 type: subject
 purpose: Topic/area maps
-field.tags: []
-field.parent:
+folder: /Subjects
 field.children: []
-field.status: active,draft,paused,done,superseded,cancelled
-default.tags: []
 default.children: []
+pair.children: subject.parent
+field.parent: ""
+pair.parent: subject.children
+field.status: "active,draft,paused,done,superseded,cancelled"
+field.tags: []
+default.tags: []
 ---

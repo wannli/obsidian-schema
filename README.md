@@ -49,7 +49,36 @@ Rules:
 - Scalar values with commas define string enums.
 - Arrays define array type; multi-value arrays define array enums.
 - `default.<field>` defines autofill default values (for missing fields).
+- `pair.<field>` defines directional inverse sync as `<targetType>.<targetField>` (example: `pair.employer: entity.employees`).
+- `linkPair.<id>` is still accepted as a legacy alias (`left<->right`) for backward compatibility.
 - `purpose` is human-readable schema intent.
+
+### Bidirectional Link Pairs
+
+Use `pair.*` to keep related fields in sync across notes and types.
+
+```md
+---
+type: colleague
+extends: [[entity]]
+field.employer:
+pair.employer: entity.employees
+---
+```
+
+```md
+---
+type: entity
+field.employees: []
+pair.employees: colleague.employer
+---
+```
+
+Behavior:
+
+- Sync is symmetric: either side can add the missing inverse link.
+- Sync is additive (union): missing inverse links are added, existing links are preserved.
+- No destructive inverse deletions are performed automatically.
 
 ## What `fix` Does
 
@@ -115,5 +144,6 @@ Install:
 - `subject`
 - `source`
 - `entity`
+- `colleague` (includes `pair.employer: entity.employees`)
 
 These are examples only; the source of truth is always your vault `Schemas/` folder.

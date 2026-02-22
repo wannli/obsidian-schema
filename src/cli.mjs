@@ -117,10 +117,9 @@ async function main() {
   for (const file of files) {
     const result = await processFile({ file, vault, schemas, mode, write });
     report.files.push(result);
-    report.fixedCount += result.fixes.length > 0 ? 1 : 0;
-    report.violationCount += result.violations.length;
-    report.skippedAmbiguousCount += result.ambiguous.length;
   }
+  await applyBidirectionalLinkPass({ vault, schemas, report, mode, write });
+  recomputeReportCounters(report);
 
   await fs.mkdir(reportDir, { recursive: true });
   const reportPath = path.join(reportDir, `schema-${mode}-report.json`);
@@ -175,6 +174,12 @@ function usage(exitCode = 0) {
   process.exit(exitCode);
 }
 
+function recomputeReportCounters(report) {
+  report.fixedCount = report.files.reduce((count, file) => count + (file.fixes.length > 0 ? 1 : 0), 0);
+  report.violationCount = report.files.reduce((count, file) => count + file.violations.length, 0);
+  report.skippedAmbiguousCount = report.files.reduce((count, file) => count + file.ambiguous.length, 0);
+}
+
 function expandHome(input) {
   if (!input) return input;
   if (input === '~') return os.homedir();
@@ -219,7 +224,7 @@ async function syncSchemaTypeKeyConvention(schemasDir) {
     } catch {
       continue;
     }
-    const next = text
+    const normalized = text
       .replace(/^(\s*field\.type)\*:/m, '$1:')
       .replace(/^(\s*type)\*:/m, '$1:')
       .replace(/^(\s*)field\.type:/m, '$1type:')
@@ -227,10 +232,102 @@ async function syncSchemaTypeKeyConvention(schemasDir) {
         const normalized = normalizeExtendsValue(raw);
         return `${prefix}${normalized}`;
       });
+    const parsed = parseMarkdownWithFrontmatter(normalized);
+    let next = normalized;
+    if (parsed.hasFrontmatter) {
+      const ordered = orderSchemaFrontmatter(parsed.frontmatter || {});
+      const fmText = serializeFrontmatter(ordered);
+      const body = parsed.body.startsWith('\n') ? parsed.body.slice(1) : parsed.body;
+      next = `---\n${fmText}\n---\n${body}`;
+    }
     if (next !== text) {
       await fs.writeFile(fullPath, next, 'utf8');
     }
   }
+}
+
+function orderSchemaFrontmatter(frontmatter) {
+  const out = {};
+  const topOrder = ['type', 'purpose', 'folder'];
+  const schemaMetaKeys = new Set(['id', 'type', 'purpose', 'folder', 'extends', 'appliesTo', 'prependDateToTitle', 'notes']);
+  const inputKeys = new Set(Object.keys(frontmatter));
+  for (const key of topOrder) {
+    if (Object.prototype.hasOwnProperty.call(frontmatter, key)) {
+      out[key] = frontmatter[key];
+    }
+  }
+
+  const fieldEntries = [];
+  const defaultEntries = [];
+  const pairEntries = [];
+  const restEntries = [];
+
+  for (const [key, value] of Object.entries(frontmatter)) {
+    if (topOrder.includes(key)) continue;
+    if (key.startsWith('field.')) {
+      fieldEntries.push({ key, value, name: normalizeSchemaFieldName(key, 'field.') });
+      continue;
+    }
+    if (key.startsWith('default.')) {
+      defaultEntries.push({ key, value, name: normalizeSchemaFieldName(key, 'default.') });
+      continue;
+    }
+    if (key.startsWith('pair.')) {
+      pairEntries.push({ key, value, name: normalizeSchemaFieldName(key, 'pair.') });
+      continue;
+    }
+    const canonicalFieldKey = canonicalizeImplicitFieldKey(key, schemaMetaKeys);
+    if (canonicalFieldKey) {
+      if (!inputKeys.has(canonicalFieldKey) || canonicalFieldKey === key) {
+        fieldEntries.push({
+          key: canonicalFieldKey,
+          value,
+          name: normalizeSchemaFieldName(canonicalFieldKey, 'field.')
+        });
+      }
+      continue;
+    }
+    restEntries.push({ key, value });
+  }
+
+  const names = new Set([
+    ...fieldEntries.map((x) => x.name),
+    ...defaultEntries.map((x) => x.name),
+    ...pairEntries.map((x) => x.name)
+  ]);
+  const orderedNames = [...names].sort((a, b) => a.localeCompare(b));
+
+  for (const name of orderedNames) {
+    for (const item of fieldEntries.filter((x) => x.name === name).sort((a, b) => a.key.localeCompare(b.key))) {
+      out[item.key] = item.value;
+    }
+    for (const item of defaultEntries.filter((x) => x.name === name).sort((a, b) => a.key.localeCompare(b.key))) {
+      out[item.key] = item.value;
+    }
+    for (const item of pairEntries.filter((x) => x.name === name).sort((a, b) => a.key.localeCompare(b.key))) {
+      out[item.key] = item.value;
+    }
+  }
+
+  for (const item of restEntries.sort((a, b) => a.key.localeCompare(b.key))) {
+    out[item.key] = item.value;
+  }
+
+  return out;
+}
+
+function normalizeSchemaFieldName(key, prefix) {
+  let name = key.slice(prefix.length);
+  if (name.endsWith('*')) name = name.slice(0, -1);
+  return name;
+}
+
+function canonicalizeImplicitFieldKey(key, schemaMetaKeys) {
+  if (key.includes('.')) return null;
+  const required = key.endsWith('*');
+  const base = required ? key.slice(0, -1) : key;
+  if (!base || schemaMetaKeys.has(base)) return null;
+  return `field.${base}${required ? '*' : ''}`;
 }
 
 function normalizeExtendsValue(raw) {
@@ -830,6 +927,8 @@ function resolveSchemaInheritance(schemas, warnings) {
     if (out.discriminator === 'type' && (out.folder === null || out.folder === undefined)) {
       out.folder = '';
     }
+    out.pairRulesByField = out.pairRulesByField || {};
+    out.pairRules = Object.values(out.pairRulesByField);
     return out;
   });
 }
@@ -838,6 +937,7 @@ function mergeSchema(base, child) {
   const merged = cloneValue(child);
   merged.properties = { ...(base.properties || {}), ...(child.properties || {}) };
   merged.required = [...new Set([...(base.required || []), ...(child.required || [])])];
+  merged.pairRulesByField = { ...(base.pairRulesByField || {}), ...(child.pairRulesByField || {}) };
   if (merged.folder === null || merged.folder === undefined) {
     merged.folder = base.folder ?? null;
   }
@@ -879,7 +979,8 @@ function parseNativeMarkdownSchema(frontmatter, body) {
     prependDateToTitle: prependDateSetting === null ? undefined : prependDateSetting,
     folder: schemaFolder,
     required: [],
-    properties: {}
+    properties: {},
+    pairRulesByField: {}
   };
   const explicitDefaults = new Map();
 
@@ -893,6 +994,47 @@ function parseNativeMarkdownSchema(frontmatter, body) {
       const defaultKey = key.slice('default.'.length);
       if (defaultKey && !defaultKey.includes('.')) {
         explicitDefaults.set(defaultKey, cloneValue(rawValue));
+      }
+      continue;
+    }
+
+    if (key.startsWith('pair.')) {
+      const sourceField = key.slice('pair.'.length).trim();
+      if (!sourceField) continue;
+      const parsedPair = parsePairValue(rawValue);
+      if (parsedPair) {
+        schema.pairRulesByField[sourceField] = {
+          sourceField,
+          targetType: parsedPair.targetType,
+          targetField: parsedPair.targetField,
+          descriptor: `pair.${sourceField}`
+        };
+      }
+      continue;
+    }
+
+    // Backward-compatible alias: linkPair.<id>: left<->right
+    if (key.startsWith('linkPair.')) {
+      const pairId = key.slice('linkPair.'.length).trim();
+      if (!pairId) continue;
+      const legacy = parseLinkPairValue(rawValue);
+      if (legacy) {
+        if (!schema.pairRulesByField[legacy.left]) {
+          schema.pairRulesByField[legacy.left] = {
+            sourceField: legacy.left,
+            targetType: null,
+            targetField: legacy.right,
+            descriptor: `linkPair.${pairId}`
+          };
+        }
+        if (!schema.pairRulesByField[legacy.right]) {
+          schema.pairRulesByField[legacy.right] = {
+            sourceField: legacy.right,
+            targetType: null,
+            targetField: legacy.left,
+            descriptor: `linkPair.${pairId}`
+          };
+        }
       }
       continue;
     }
@@ -947,7 +1089,29 @@ function parseNativeMarkdownSchema(frontmatter, body) {
     schema.required.push('type');
   }
 
+  schema.pairRules = Object.values(schema.pairRulesByField);
+
   return schema.id ? schema : null;
+}
+
+function parseLinkPairValue(rawValue) {
+  if (typeof rawValue !== 'string') return null;
+  const m = rawValue.trim().match(/^([A-Za-z0-9_-]+)\s*<->\s*([A-Za-z0-9_-]+)$/);
+  if (!m) return null;
+  return {
+    left: m[1],
+    right: m[2]
+  };
+}
+
+function parsePairValue(rawValue) {
+  if (typeof rawValue !== 'string') return null;
+  const m = rawValue.trim().match(/^([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/);
+  if (!m) return null;
+  return {
+    targetType: m[1],
+    targetField: m[2]
+  };
 }
 
 function isSimpleWikiLink(value) {
@@ -1282,6 +1446,284 @@ async function processFile({ file, vault, schemas, mode, write }) {
     ambiguous,
     violations
   };
+}
+
+async function applyBidirectionalLinkPass({ vault, schemas, report, mode, write }) {
+  const notes = [];
+  const reportsByFile = new Map();
+  const schemaIndex = buildTypeSchemaIndex(schemas);
+  for (const item of report.files) {
+    reportsByFile.set(item.file, item);
+  }
+
+  for (const item of report.files) {
+    const file = item.file;
+    let raw = '';
+    try {
+      raw = await fs.readFile(file, 'utf8');
+    } catch (error) {
+      item.violations.push({
+        rule: 'backlink/read-failed',
+        message: `Failed to read '${path.relative(vault, file)}': ${error.message}`
+      });
+      continue;
+    }
+    const parsed = parseMarkdownWithFrontmatter(raw);
+    const relPath = path.relative(vault, file).split(path.sep).join('/');
+    const matchInfo = pickSchemasForFile({ relPath, working: parsed.frontmatter || {}, schemas });
+    const typeSchema = matchInfo?.typeSchema || null;
+    const note = {
+      file,
+      relPath,
+      body: parsed.body,
+      hasFrontmatter: parsed.hasFrontmatter,
+      frontmatter: structuredClone(parsed.frontmatter || {}),
+      schema: typeSchema,
+      changed: false
+    };
+    notes.push(note);
+  }
+
+  const titleMap = new Map();
+  for (const note of notes) {
+    const title = path.basename(note.file, '.md').trim();
+    const key = normalizeTitleKey(title);
+    if (!key) continue;
+    if (!titleMap.has(key)) titleMap.set(key, []);
+    titleMap.get(key).push(note);
+  }
+
+  const linkOpsSeen = new Set();
+
+  for (const source of notes) {
+    const pairRules = source.schema?.pairRules || [];
+    if (!Array.isArray(pairRules) || pairRules.length === 0) continue;
+    for (const rule of pairRules) {
+      applyBacklinkDirection({
+        source,
+        sourceField: rule.sourceField,
+        targetType: rule.targetType,
+        targetField: rule.targetField,
+        descriptor: rule.descriptor || `pair.${rule.sourceField}`,
+        schemaIndex,
+        titleMap,
+        linkOpsSeen,
+        reportsByFile
+      });
+    }
+  }
+
+  if (mode === 'fix' && write) {
+    for (const note of notes) {
+      if (!note.changed) continue;
+      const updatedText = serializeMarkdown(note.body, note.frontmatter, note.hasFrontmatter);
+      await fs.writeFile(note.file, updatedText, 'utf8');
+    }
+  }
+
+  for (const note of notes) {
+    if (!note.changed) continue;
+    const entry = reportsByFile.get(note.file);
+    if (entry) entry.changed = true;
+  }
+}
+
+function applyBacklinkDirection({
+  source,
+  sourceField,
+  targetType,
+  targetField,
+  descriptor,
+  schemaIndex,
+  titleMap,
+  linkOpsSeen,
+  reportsByFile
+}) {
+  const sourceReport = reportsByFile.get(source.file);
+  if (!sourceReport) return;
+  const outboundLinks = extractLinkTargets(source.frontmatter[sourceField]);
+  for (const outboundLink of outboundLinks) {
+    const targetTitle = parseWikiLinkTarget(outboundLink);
+    if (!targetTitle) continue;
+    const key = normalizeTitleKey(targetTitle);
+    const matches = titleMap.get(key) || [];
+    if (matches.length === 0) {
+      sourceReport.violations.push({
+        rule: 'backlink/unresolved',
+        field: sourceField,
+        message: `Unresolved backlink target '${targetTitle}' from '${sourceField}' (${descriptor})`
+      });
+      continue;
+    }
+    if (matches.length > 1) {
+      sourceReport.violations.push({
+        rule: 'backlink/ambiguous',
+        field: sourceField,
+        message: `Ambiguous backlink target '${targetTitle}' from '${sourceField}' (${descriptor})`
+      });
+      continue;
+    }
+
+    const target = matches[0];
+    if (targetType && !noteMatchesTargetType(target, targetType, schemaIndex)) {
+      sourceReport.violations.push({
+        rule: 'backlink/type-mismatch',
+        field: sourceField,
+        message: `Backlink target '${targetTitle}' type '${target.frontmatter.type || ''}' does not match '${targetType}' (${descriptor})`
+      });
+      continue;
+    }
+    const sourceTitle = path.basename(source.file, '.md').trim();
+    const sourceLink = `[[${sourceTitle}]]`;
+    const opKey = `${target.file}::${targetField}::${normalizeTitleKey(sourceTitle)}`;
+    if (linkOpsSeen.has(opKey)) continue;
+    linkOpsSeen.add(opKey);
+
+    const containerKind = fieldContainerKind(target.schema?.properties?.[targetField], target.frontmatter[targetField]);
+    const added = addInverseLink({
+      frontmatter: target.frontmatter,
+      field: targetField,
+      link: sourceLink,
+      containerKind
+    });
+    if (!added.ok) {
+      sourceReport.violations.push({
+        rule: added.rule,
+        field: targetField,
+        message: `${added.message} (${descriptor})`
+      });
+      continue;
+    }
+    if (added.changed) {
+      target.changed = true;
+      const targetReport = reportsByFile.get(target.file);
+      if (targetReport) {
+        targetReport.fixes.push(
+          `synced inverse '${targetField}' from [[${path.basename(source.file, '.md')}]] via '${descriptor}'`
+        );
+      }
+    }
+  }
+}
+
+function fieldContainerKind(prop, currentValue) {
+  if (prop && prop.type === 'array') return 'array';
+  if (prop && prop.type === 'string') return 'scalar';
+  if (Array.isArray(currentValue)) return 'array';
+  if (typeof currentValue === 'string' && currentValue.trim()) return 'scalar';
+  if (currentValue === null || currentValue === undefined || currentValue === '') return 'unknown';
+  return 'unknown';
+}
+
+function addInverseLink({ frontmatter, field, link, containerKind }) {
+  if (containerKind === 'unknown') {
+    return {
+      ok: false,
+      rule: 'backlink/unknown-field',
+      message: `Cannot infer container type for inverse field '${field}'`
+    };
+  }
+
+  if (containerKind === 'array') {
+    const current = Array.isArray(frontmatter[field]) ? frontmatter[field] : extractLinkTargets(frontmatter[field]);
+    const links = current.map((item) => normalizeWikiLinkValue(item)).filter(Boolean);
+    const existing = new Set(links.map((item) => normalizeTitleKey(parseWikiLinkTarget(item) || item)));
+    const key = normalizeTitleKey(parseWikiLinkTarget(link) || link);
+    if (!existing.has(key)) {
+      links.push(link);
+      frontmatter[field] = links;
+      return { ok: true, changed: true };
+    }
+    if (!Array.isArray(frontmatter[field])) {
+      frontmatter[field] = links;
+      return { ok: true, changed: true };
+    }
+    return { ok: true, changed: false };
+  }
+
+  const existing = normalizeWikiLinkValue(frontmatter[field]);
+  if (!existing) {
+    frontmatter[field] = link;
+    return { ok: true, changed: true };
+  }
+  const existingTarget = normalizeTitleKey(parseWikiLinkTarget(existing) || existing);
+  const wantedTarget = normalizeTitleKey(parseWikiLinkTarget(link) || link);
+  if (existingTarget === wantedTarget) {
+    if (frontmatter[field] !== existing) {
+      frontmatter[field] = existing;
+      return { ok: true, changed: true };
+    }
+    return { ok: true, changed: false };
+  }
+  return {
+    ok: false,
+    rule: 'backlink/scalar-conflict',
+    message: `Scalar inverse field '${field}' already points to '${existing}'`
+  };
+}
+
+function extractLinkTargets(fieldValue) {
+  if (Array.isArray(fieldValue)) {
+    return fieldValue.map((item) => normalizeWikiLinkValue(item)).filter(Boolean);
+  }
+  const one = normalizeWikiLinkValue(fieldValue);
+  return one ? [one] : [];
+}
+
+function normalizeWikiLinkValue(value) {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  if (isWikiLink(raw)) {
+    const target = parseWikiLinkTarget(raw);
+    return target ? `[[${target}]]` : null;
+  }
+  const cleaned = raw.replace(/^\[\[|\]\]$/g, '').trim();
+  return cleaned ? `[[${cleaned}]]` : null;
+}
+
+function parseWikiLinkTarget(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  const match = trimmed.match(/^\[\[([^\]]+)\]\]$/);
+  if (!match) return null;
+  const base = match[1].split('|')[0].split('#')[0].trim();
+  return base || null;
+}
+
+function normalizeTitleKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function buildTypeSchemaIndex(schemas) {
+  const index = new Map();
+  for (const schema of schemas || []) {
+    if (normalizeString(schema?.discriminator) !== 'type') continue;
+    const id = normalizeString(schema?.id);
+    if (!id || index.has(id)) continue;
+    index.set(id, schema);
+  }
+  return index;
+}
+
+function noteMatchesTargetType(note, targetType, schemaIndex) {
+  const wanted = normalizeString(targetType);
+  if (!wanted) return true;
+  const directType = normalizeString(note?.schema?.id || note?.frontmatter?.type);
+  return typeMatchesOrExtends(directType, wanted, schemaIndex);
+}
+
+function typeMatchesOrExtends(typeValue, wantedType, schemaIndex) {
+  let current = normalizeString(typeValue);
+  const wanted = normalizeString(wantedType);
+  const seen = new Set();
+  while (current && !seen.has(current)) {
+    if (current === wanted) return true;
+    seen.add(current);
+    const schema = schemaIndex.get(current);
+    current = normalizeString(schema?.extends);
+  }
+  return false;
 }
 
 function applyBroadAutofix({ relPath, filePath, working, fixes }) {

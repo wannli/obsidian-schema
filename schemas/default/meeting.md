@@ -1,12 +1,12 @@
 ---
-folder: /Meetings
 type: meeting
-prependDateToTitle: true
 purpose: Meeting notes
-date*:
-field.tags: []
+folder: /Meetings
 field.attendees: []
-field.status: active,draft,paused,done,superseded,cancelled
-default.tags: []
 default.attendees: []
+field.date*: ""
+field.status: "active,draft,paused,done,superseded,cancelled"
+field.tags: []
+default.tags: []
+prependDateToTitle: true
 ---
