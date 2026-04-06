@@ -1,4 +1,4 @@
-const { Plugin, PluginSettingTab, Setting, normalizePath } = require("obsidian");
+const { Plugin, PluginSettingTab, Setting, Notice, normalizePath } = require("obsidian");
 
 const TERMINAL_STATUSES = new Set(["done", "superseded", "cancelled"]);
 
@@ -9,7 +9,8 @@ const DEFAULT_SETTINGS = {
   schemasFolder: "Schemas",
   excludedFolders: ["Attachments", "Schemas", "Templates"],
   archiveFolder: "Archive",
-  enableDatePrefixRename: false
+  enableDatePrefixRename: false,
+  verboseLogging: false
 };
 
 module.exports = class MobileSchemaTyperPlugin extends Plugin {
@@ -24,12 +25,49 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     this.fullRunRequested = false;
     this.schemasDirty = true;
     this.selfTouchedUntil = new Map();
+    this.lastRunMode = "background";
+    this.runStats = createRunStats();
 
     this.addSettingTab(new MobileSchemaTyperSettingTab(this.app, this));
     this.addCommand({
       id: "mobile-schema-typer-run-now",
       name: "Run schema fix now",
-      callback: () => this.scheduleRun({ full: true })
+      callback: () => this.scheduleRun({ full: true, mode: "manual" })
+    });
+
+    this.addCommand({
+      id: "mobile-schema-typer-run-current-file",
+      name: "Run schema fix on current file",
+      callback: () => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension !== "md") {
+          new Notice("No active markdown file");
+          return;
+        }
+        this.scheduleRun({ filePath: file.path, mode: "manual" });
+      }
+    });
+
+    this.addCommand({
+      id: "mobile-schema-typer-backlink-sync-now",
+      name: "Rebuild backlinks now",
+      callback: async () => {
+        await this.ensureSchemasFresh();
+        const files = this.app.vault.getMarkdownFiles().filter((f) => !this.isExcludedPath(f.path));
+        this.runStats = createRunStats();
+        await this.runBacklinkSync(files);
+        this.showRunSummary("manual", { backlinkOnly: true });
+      }
+    });
+
+    this.addCommand({
+      id: "mobile-schema-typer-preview-run",
+      name: "Preview schema fix summary",
+      callback: async () => {
+        await this.ensureSchemasFresh();
+        const files = this.app.vault.getMarkdownFiles().filter((f) => !this.isExcludedPath(f.path));
+        new Notice(`Mobile Schema Typer would scan ${files.length} markdown files.`);
+      }
     });
 
     await this.ensureSchemasFresh();
@@ -106,9 +144,10 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     this.scheduleRun({ filePath: file.path });
   }
 
-  scheduleRun({ filePath = null, full = false } = {}) {
+  scheduleRun({ filePath = null, full = false, mode = "background" } = {}) {
     if (filePath) this.pendingPaths.add(filePath);
     if (full) this.fullRunRequested = true;
+    this.lastRunMode = mode;
     this.clearRunTimer();
     const debounceMs = Math.max(250, Number(this.settings.debounceMs) || 1200);
     this.runTimer = window.setTimeout(() => {
@@ -203,6 +242,8 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       return;
     }
     this.running = true;
+    this.runStats = createRunStats();
+    const runMode = this.lastRunMode;
     try {
       await this.ensureSchemasFresh();
       const runFull = this.fullRunRequested || this.pendingPaths.size === 0;
@@ -213,15 +254,18 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
             .filter((f) => f && f.extension === "md" && !this.isExcludedPath(f.path));
       this.pendingPaths.clear();
       this.fullRunRequested = false;
+      this.runStats.scanned = files.length;
       for (const file of files) {
         await this.applySchemaToFile(file);
       }
       await this.runBacklinkSync(files);
+      this.showRunSummary(runMode);
     } finally {
       this.running = false;
+      this.lastRunMode = "background";
       if (this.pendingRun) {
         this.pendingRun = false;
-        this.scheduleRun(null);
+        this.scheduleRun();
       }
     }
   }
@@ -275,6 +319,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
 
   async applySchemaToFile(file) {
     let nextFrontmatter = null;
+    let frontmatterChanged = false;
     await this.app.fileManager.processFrontMatter(file, (fm) => {
       let type = typeof fm.type === "string" ? fm.type.trim() : "";
       if (!type) {
@@ -282,11 +327,15 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
         if (inferred) {
           fm.type = inferred;
           type = inferred;
+          frontmatterChanged = true;
         }
       }
 
       type = normalizeTypeKey(type);
-      if (type && fm.type !== type) fm.type = type;
+      if (type && fm.type !== type) {
+        fm.type = type;
+        frontmatterChanged = true;
+      }
 
       const resolved = this.resolveSchema(type);
       if (!resolved) {
@@ -298,8 +347,10 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
         const hasField = Object.prototype.hasOwnProperty.call(fm, field);
         if (!hasField && resolved.required.has(field)) {
           fm[field] = defaultValueForMissing(def);
+          frontmatterChanged = true;
         } else if (!hasField && def.defaultDefined) {
           fm[field] = cloneValue(def.defaultValue);
+          frontmatterChanged = true;
         }
       }
 
@@ -308,9 +359,12 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
 
       if (resolved.required.has("type") && !fm.type) {
         fm.type = type || "";
+        frontmatterChanged = true;
       }
       nextFrontmatter = cloneValue(fm);
     });
+
+    if (frontmatterChanged) this.runStats.updated += 1;
 
     const latest = this.app.vault.getAbstractFileByPath(file.path) || file;
     if (!latest || !latest.path || !nextFrontmatter) return;
@@ -330,6 +384,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
           if (!(await this.exists(targetPath))) {
             await this.app.fileManager.renameFile(currentFile, targetPath);
             this.markSelfTouch(targetPath);
+            this.runStats.renamed += 1;
             currentFile = this.app.vault.getAbstractFileByPath(targetPath);
           }
         }
@@ -346,6 +401,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
           await this.app.vault.createFolder(normalizedTarget).catch(() => {});
           await this.app.fileManager.renameFile(currentFile, targetPath);
           this.markSelfTouch(targetPath);
+          this.runStats.moved += 1;
         }
       }
     }
@@ -416,13 +472,16 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
             containerKind: op.containerKind
           });
           if (!res.ok) {
-            console.debug(`[mobile-schema-typer] ${res.message} (${op.descriptor})`);
+            this.recordWarning(`${res.message} (${op.descriptor})`);
             continue;
           }
           changed = changed || res.changed;
         }
       });
-      if (changed) this.markSelfTouch(targetPath);
+      if (changed) {
+        this.markSelfTouch(targetPath);
+        this.runStats.backlinksAdded += 1;
+      }
     }
   }
 
@@ -433,28 +492,28 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       if (!targetTitle) continue;
       const matches = titleMap.get(normalizeTitleKey(targetTitle)) || [];
       if (matches.length === 0) {
-        console.debug(
-          `[mobile-schema-typer] Unresolved backlink target '${targetTitle}' from '${source.file.path}' (${descriptor})`
+        this.recordWarning(
+          `Unresolved backlink target '${targetTitle}' from '${source.file.path}' (${descriptor})`
         );
         continue;
       }
       if (matches.length > 1) {
-        console.debug(
-          `[mobile-schema-typer] Ambiguous backlink target '${targetTitle}' from '${source.file.path}' (${descriptor})`
+        this.recordWarning(
+          `Ambiguous backlink target '${targetTitle}' from '${source.file.path}' (${descriptor})`
         );
         continue;
       }
       const target = matches[0];
       if (targetType && !typeMatchesOrExtends(target.frontmatter.type, targetType, this.schemas)) {
-        console.debug(
-          `[mobile-schema-typer] Backlink target '${targetTitle}' type mismatch for '${source.file.path}' (${descriptor})`
+        this.recordWarning(
+          `Backlink target '${targetTitle}' type mismatch for '${source.file.path}' (${descriptor})`
         );
         continue;
       }
       const containerKind = fieldContainerKind(target.schema?.fields?.get(targetField), target.frontmatter[targetField]);
       if (containerKind === "unknown") {
-        console.debug(
-          `[mobile-schema-typer] Cannot infer container type for '${targetField}' on '${target.file.path}' (${descriptor})`
+        this.recordWarning(
+          `Cannot infer container type for '${targetField}' on '${target.file.path}' (${descriptor})`
         );
         continue;
       }
@@ -470,6 +529,32 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
         descriptor
       });
     }
+  }
+
+  recordWarning(message) {
+    if (!message) return;
+    this.runStats.warnings.push(message);
+    if (this.settings.verboseLogging) console.debug(`[mobile-schema-typer] ${message}`);
+  }
+
+  showRunSummary(mode, { backlinkOnly = false } = {}) {
+    if (mode !== "manual") return;
+    const stats = this.runStats;
+    const parts = backlinkOnly
+      ? [
+          `backlink sync complete`,
+          `${stats.backlinksAdded} files updated`,
+          `${stats.warnings.length} warnings`
+        ]
+      : [
+          `scanned ${stats.scanned} files`,
+          `${stats.updated} updated`,
+          `${stats.renamed} renamed`,
+          `${stats.moved} moved`,
+          `${stats.backlinksAdded} backlink updates`,
+          `${stats.warnings.length} warnings`
+        ];
+    new Notice(`Mobile Schema Typer: ${parts.join(", ")}`);
   }
 
   async loadSettings() {
@@ -561,6 +646,16 @@ class MobileSchemaTyperSettingTab extends PluginSettingTab {
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.enableDatePrefixRename).onChange(async (value) => {
           this.plugin.settings.enableDatePrefixRename = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Verbose logging")
+      .setDesc("Log warnings to the developer console during runs.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.verboseLogging).onChange(async (value) => {
+          this.plugin.settings.verboseLogging = value;
           await this.plugin.saveSettings();
         })
       );
@@ -899,6 +994,17 @@ function cloneValue(value) {
   if (Array.isArray(value)) return [...value];
   if (value && typeof value === "object") return JSON.parse(JSON.stringify(value));
   return value;
+}
+
+function createRunStats() {
+  return {
+    scanned: 0,
+    updated: 0,
+    renamed: 0,
+    moved: 0,
+    backlinksAdded: 0,
+    warnings: []
+  };
 }
 
 function extractDatePrefix(dateValue) {
