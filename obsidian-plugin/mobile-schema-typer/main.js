@@ -178,8 +178,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     const nextFolderTypeMap = new Map();
 
     for (const file of files) {
-      const text = await this.app.vault.cachedRead(file);
-      const fm = parseFrontmatter(text);
+      const fm = this.readFrontmatterForFile(file);
       if (!fm || typeof fm.type !== "string" || !fm.type.trim()) continue;
       const schema = parseSchemaFrontmatter(fm);
       const schemaKey = normalizeTypeKey(schema.type);
@@ -275,6 +274,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
   }
 
   async applySchemaToFile(file) {
+    let nextFrontmatter = null;
     await this.app.fileManager.processFrontMatter(file, (fm) => {
       let type = typeof fm.type === "string" ? fm.type.trim() : "";
       if (!type) {
@@ -285,8 +285,14 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
         }
       }
 
+      type = normalizeTypeKey(type);
+      if (type && fm.type !== type) fm.type = type;
+
       const resolved = this.resolveSchema(type);
-      if (!resolved) return;
+      if (!resolved) {
+        nextFrontmatter = cloneValue(fm);
+        return;
+      }
 
       for (const [field, def] of resolved.fields.entries()) {
         const hasField = Object.prototype.hasOwnProperty.call(fm, field);
@@ -303,14 +309,14 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       if (resolved.required.has("type") && !fm.type) {
         fm.type = type || "";
       }
+      nextFrontmatter = cloneValue(fm);
     });
 
     const latest = this.app.vault.getAbstractFileByPath(file.path) || file;
-    if (!latest || !latest.path) return;
+    if (!latest || !latest.path || !nextFrontmatter) return;
     let currentFile = latest;
-    const text = await this.app.vault.cachedRead(currentFile);
-    const fm = parseFrontmatter(text) || {};
-    const type = typeof fm.type === "string" ? fm.type.trim() : "";
+    const fm = nextFrontmatter;
+    const type = typeof fm.type === "string" ? normalizeTypeKey(fm.type) : "";
     const resolved = this.resolveSchema(type);
     if (!resolved) return;
 
@@ -356,14 +362,19 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     return Boolean(found);
   }
 
+  readFrontmatterForFile(file) {
+    const cache = this.app.metadataCache.getFileCache(file);
+    if (cache?.frontmatter) return cloneValue(cache.frontmatter);
+    return null;
+  }
+
   async runBacklinkSync(files) {
     const notes = [];
     const titleMap = new Map();
 
     for (const file of files) {
       if (!file || file.extension !== "md") continue;
-      const text = await this.app.vault.cachedRead(file);
-      const fm = parseFrontmatter(text) || {};
+      const fm = this.readFrontmatterForFile(file) || {};
       const type = typeof fm.type === "string" ? fm.type.trim() : "";
       const schema = this.resolveSchema(type);
       if (!schema || !Array.isArray(schema.pairRules) || schema.pairRules.length === 0) continue;
