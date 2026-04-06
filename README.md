@@ -77,8 +77,9 @@ pair.employees: colleague.employer
 Behavior:
 
 - Sync is symmetric: either side can add the missing inverse link.
-- Sync is additive (union): missing inverse links are added, existing links are preserved.
-- No destructive inverse deletions are performed automatically.
+- Sync is conservative for non-managed values: conflicting scalar values are left untouched and reported.
+- Managed inverse links are reconciled on each run: stale links in the configured inverse field are removed when they are no longer implied by current source links.
+- Link resolution uses Obsidian's native link resolution rules rather than basename-only matching.
 
 ## What `fix` Does
 
@@ -127,12 +128,21 @@ Behavior:
 - Prepends `YYYY-MM-DD ` to note title when schema has `prependDateToTitle: true`.
 - Moves notes to schema `folder`.
 - Overrides folder to `Archive` when `status` is `done`, `superseded`, or `cancelled`.
+- Uses metadata-cache frontmatter reads for better Obsidian compatibility.
+- Resolves backlink targets with Obsidian link APIs.
+- Reconciles managed inverse backlinks and reports warnings during manual runs.
+- Supports manual commands for full run, current file, backlink rebuild, and preview.
 
 Install:
 
 1. Copy `mobile-schema-typer` into `<vault>/.obsidian/plugins/mobile-schema-typer`.
 2. Enable the plugin in Community Plugins.
 3. Optionally configure debounce/exclusions/folders in plugin settings.
+4. Use the command palette for:
+   - `Run schema fix now`
+   - `Run schema fix on current file`
+   - `Rebuild backlinks now`
+   - `Preview schema fix summary`
 
 ## Default Starter Schemas
 
