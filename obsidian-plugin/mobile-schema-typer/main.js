@@ -21,28 +21,44 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     this.running = false;
     this.pendingRun = false;
     this.pendingPaths = new Set();
+    this.fullRunRequested = false;
+    this.schemasDirty = true;
     this.selfTouchedUntil = new Map();
 
     this.addSettingTab(new MobileSchemaTyperSettingTab(this.app, this));
     this.addCommand({
       id: "mobile-schema-typer-run-now",
       name: "Run schema fix now",
-      callback: () => this.scheduleRun(null)
+      callback: () => this.scheduleRun({ full: true })
     });
 
-    await this.refreshSchemas();
+    await this.ensureSchemasFresh();
 
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
         if (!this.settings.enabled || !this.settings.runOnModify || !file || file.extension !== "md") return;
-        if (this.isExcludedPath(file.path)) return;
-        if (this.isSelfTouch(file.path)) return;
+        this.handleMarkdownEvent("modify", file);
+      })
+    );
 
-        if (this.isSchemaFile(file.path)) {
-          this.scheduleSchemaRefresh();
-          return;
-        }
-        this.scheduleRun(file.path);
+    this.registerEvent(
+      this.app.vault.on("create", (file) => {
+        if (!this.settings.enabled || !this.settings.runOnModify || !file || file.extension !== "md") return;
+        this.handleMarkdownEvent("create", file);
+      })
+    );
+
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        if (!this.settings.enabled || !file || file.extension !== "md") return;
+        this.handleMarkdownDelete(file);
+      })
+    );
+
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (!this.settings.enabled || !file || file.extension !== "md") return;
+        this.handleMarkdownRename(file, oldPath);
       })
     );
   }
@@ -52,11 +68,47 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
   }
 
   scheduleSchemaRefresh() {
-    window.setTimeout(() => this.refreshSchemas(), 300);
+    this.schemasDirty = true;
+    window.setTimeout(() => this.ensureSchemasFresh(), 300);
   }
 
-  scheduleRun(filePath) {
+  handleMarkdownEvent(_eventName, file) {
+    if (!file || this.isExcludedPath(file.path) || this.isSelfTouch(file.path)) return;
+
+    if (this.isSchemaFile(file.path)) {
+      this.scheduleSchemaRefresh();
+      this.scheduleRun({ full: true });
+      return;
+    }
+
+    this.scheduleRun({ filePath: file.path });
+  }
+
+  handleMarkdownDelete(file) {
+    if (!file) return;
+    if (this.isSchemaFile(file.path)) {
+      this.scheduleSchemaRefresh();
+      this.scheduleRun({ full: true });
+    }
+  }
+
+  handleMarkdownRename(file, oldPath) {
+    if (!file || this.isExcludedPath(file.path) || this.isSelfTouch(file.path)) return;
+
+    const oldWasSchema = this.isSchemaFile(oldPath);
+    const newIsSchema = this.isSchemaFile(file.path);
+    if (oldWasSchema || newIsSchema) {
+      this.scheduleSchemaRefresh();
+      this.scheduleRun({ full: true });
+      return;
+    }
+
+    this.scheduleRun({ filePath: file.path });
+  }
+
+  scheduleRun({ filePath = null, full = false } = {}) {
     if (filePath) this.pendingPaths.add(filePath);
+    if (full) this.fullRunRequested = true;
     this.clearRunTimer();
     const debounceMs = Math.max(250, Number(this.settings.debounceMs) || 1200);
     this.runTimer = window.setTimeout(() => {
@@ -111,6 +163,11 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     return true;
   }
 
+  async ensureSchemasFresh() {
+    if (!this.schemasDirty) return;
+    await this.refreshSchemas();
+  }
+
   async refreshSchemas() {
     const schemaRoot = this.cleanFolder(this.settings.schemasFolder);
     const files = this.app.vault
@@ -125,15 +182,20 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       const fm = parseFrontmatter(text);
       if (!fm || typeof fm.type !== "string" || !fm.type.trim()) continue;
       const schema = parseSchemaFrontmatter(fm);
-      nextSchemas.set(schema.type, schema);
+      const schemaKey = normalizeTypeKey(schema.type);
+      if (!schemaKey) continue;
+      schema.type = schemaKey;
+      schema.extends = normalizeTypeKey(schema.extends);
+      nextSchemas.set(schemaKey, schema);
       if (schema.folder) {
         const folderKey = this.cleanFolder(schema.folder);
-        if (folderKey) nextFolderTypeMap.set(folderKey, schema.type);
+        if (folderKey) nextFolderTypeMap.set(folderKey, schemaKey);
       }
     }
 
     this.schemas = nextSchemas;
     this.folderTypeMap = nextFolderTypeMap;
+    this.schemasDirty = false;
   }
 
   async runOnce() {
@@ -143,13 +205,15 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     }
     this.running = true;
     try {
-      await this.refreshSchemas();
-      const files = this.pendingPaths.size > 0
-        ? [...this.pendingPaths]
+      await this.ensureSchemasFresh();
+      const runFull = this.fullRunRequested || this.pendingPaths.size === 0;
+      const files = runFull
+        ? this.app.vault.getMarkdownFiles().filter((f) => !this.isExcludedPath(f.path))
+        : [...this.pendingPaths]
             .map((p) => this.app.vault.getAbstractFileByPath(p))
-            .filter((f) => f && f.extension === "md" && !this.isExcludedPath(f.path))
-        : this.app.vault.getMarkdownFiles().filter((f) => !this.isExcludedPath(f.path));
+            .filter((f) => f && f.extension === "md" && !this.isExcludedPath(f.path));
       this.pendingPaths.clear();
+      this.fullRunRequested = false;
       for (const file of files) {
         await this.applySchemaToFile(file);
       }
@@ -168,14 +232,21 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     if (folder && this.folderTypeMap.has(folder)) return this.folderTypeMap.get(folder);
     const firstSegment = folder.split("/")[0] || "";
     if (this.folderTypeMap.has(firstSegment)) return this.folderTypeMap.get(firstSegment);
+    const segments = folder.split("/").filter(Boolean);
+    while (segments.length > 1) {
+      segments.pop();
+      const ancestor = segments.join("/");
+      if (this.folderTypeMap.has(ancestor)) return this.folderTypeMap.get(ancestor);
+    }
     return null;
   }
 
   resolveSchema(type) {
-    if (!type || !this.schemas.has(type)) return null;
+    const typeKey = normalizeTypeKey(type);
+    if (!typeKey || !this.schemas.has(typeKey)) return null;
     const chain = [];
     const seen = new Set();
-    let current = this.schemas.get(type);
+    let current = this.schemas.get(typeKey);
     while (current && !seen.has(current.type)) {
       seen.add(current.type);
       chain.push(current);
@@ -183,7 +254,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     }
     chain.reverse();
     const merged = {
-      type,
+      type: typeKey,
       fields: new Map(),
       required: new Set(),
       folder: null,
@@ -736,8 +807,12 @@ function normalizeTitleKey(value) {
   return String(value || "").trim().toLowerCase();
 }
 
-function normalizeTypeValue(value) {
+function normalizeTypeKey(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function normalizeTypeValue(value) {
+  return normalizeTypeKey(value);
 }
 
 function typeMatchesOrExtends(noteType, targetType, schemasByType) {
