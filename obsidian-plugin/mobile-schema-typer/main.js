@@ -426,7 +426,6 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
 
   async runBacklinkSync(files) {
     const notes = [];
-    const titleMap = new Map();
 
     for (const file of files) {
       if (!file || file.extension !== "md") continue;
@@ -437,9 +436,6 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       const title = String(file.basename || "").trim();
       const note = { file, frontmatter: fm, schema, title };
       notes.push(note);
-      const key = normalizeTitleKey(title);
-      if (!titleMap.has(key)) titleMap.set(key, []);
-      titleMap.get(key).push(note);
     }
 
     const planned = new Map();
@@ -452,7 +448,6 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
           targetType: rule.targetType,
           targetField: rule.targetField,
           descriptor: rule.descriptor || `pair.${rule.sourceField}`,
-          titleMap,
           planned,
           dedupe
         });
@@ -485,28 +480,14 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     }
   }
 
-  planBacklinkDirection({ source, sourceField, targetType, targetField, descriptor, titleMap, planned, dedupe }) {
+  planBacklinkDirection({ source, sourceField, targetType, targetField, descriptor, planned, dedupe }) {
     const links = extractLinkTargets(source.frontmatter[sourceField]);
     for (const link of links) {
-      const targetTitle = parseWikiLinkTarget(link);
-      if (!targetTitle) continue;
-      const matches = titleMap.get(normalizeTitleKey(targetTitle)) || [];
-      if (matches.length === 0) {
-        this.recordWarning(
-          `Unresolved backlink target '${targetTitle}' from '${source.file.path}' (${descriptor})`
-        );
-        continue;
-      }
-      if (matches.length > 1) {
-        this.recordWarning(
-          `Ambiguous backlink target '${targetTitle}' from '${source.file.path}' (${descriptor})`
-        );
-        continue;
-      }
-      const target = matches[0];
+      const target = this.resolveBacklinkTarget(link, source.file.path, descriptor);
+      if (!target) continue;
       if (targetType && !typeMatchesOrExtends(target.frontmatter.type, targetType, this.schemas)) {
         this.recordWarning(
-          `Backlink target '${targetTitle}' type mismatch for '${source.file.path}' (${descriptor})`
+          `Backlink target '${target.file.path}' type mismatch for '${source.file.path}' (${descriptor})`
         );
         continue;
       }
@@ -517,8 +498,8 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
         );
         continue;
       }
-      const sourceLink = `[[${source.title}]]`;
-      const opKey = `${target.file.path}::${targetField}::${normalizeTitleKey(source.title)}`;
+      const sourceLink = buildWikiLinkToFile(source.file);
+      const opKey = `${target.file.path}::${targetField}::${normalizeTitleKey(source.file.path)}`;
       if (dedupe.has(opKey)) continue;
       dedupe.add(opKey);
       if (!planned.has(target.file.path)) planned.set(target.file.path, []);
@@ -529,6 +510,36 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
         descriptor
       });
     }
+  }
+
+  resolveBacklinkTarget(link, sourcePath, descriptor) {
+    const targetRef = parseWikiLinkTarget(link);
+    if (!targetRef) return null;
+
+    const destination = this.app.metadataCache.getFirstLinkpathDest(targetRef, sourcePath);
+    if (!destination || destination.extension !== "md") {
+      this.recordWarning(
+        `Unresolved backlink target '${targetRef}' from '${sourcePath}' (${descriptor})`
+      );
+      return null;
+    }
+
+    const fm = this.readFrontmatterForFile(destination) || {};
+    const type = typeof fm.type === "string" ? normalizeTypeKey(fm.type) : "";
+    const schema = this.resolveSchema(type);
+    if (!schema) {
+      this.recordWarning(
+        `Resolved backlink target '${destination.path}' has no matching schema (${descriptor})`
+      );
+      return null;
+    }
+
+    return {
+      file: destination,
+      frontmatter: fm,
+      schema,
+      title: String(destination.basename || "").trim()
+    };
   }
 
   recordWarning(message) {
@@ -1005,6 +1016,13 @@ function createRunStats() {
     backlinksAdded: 0,
     warnings: []
   };
+}
+
+function buildWikiLinkToFile(file) {
+  const path = String(file?.path || "").trim();
+  if (!path) return "[[" + String(file?.basename || "") + "]]";
+  const withoutExt = path.replace(/\.md$/i, "");
+  return `[[${withoutExt}]]`;
 }
 
 function extractDatePrefix(dateValue) {
