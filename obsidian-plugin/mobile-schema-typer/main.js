@@ -451,6 +451,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
 
     const planned = new Map();
     const dedupe = new Set();
+    const managedFieldsByTarget = new Map();
     for (const source of notes) {
       for (const rule of source.schema.pairRules) {
         this.planBacklinkDirection({
@@ -460,7 +461,8 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
           targetField: rule.targetField,
           descriptor: rule.descriptor || `pair.${rule.sourceField}`,
           planned,
-          dedupe
+          dedupe,
+          managedFieldsByTarget
         });
       }
     }
@@ -469,7 +471,29 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       const targetFile = this.app.vault.getAbstractFileByPath(targetPath);
       if (!targetFile || targetFile.extension !== "md") continue;
       let changed = false;
+      const managedFields = managedFieldsByTarget.get(targetPath) || new Set();
+      const targetNote = notes.find((note) => note.file.path === targetPath);
       await this.app.fileManager.processFrontMatter(targetFile, (fm) => {
+        for (const field of managedFields) {
+          const fieldOps = ops.filter((op) => op.field === field);
+          const schemaDef = targetNote?.schema?.fields?.get(field);
+          const currentValue = fm[field];
+          const containerKind = fieldContainerKind(schemaDef, currentValue);
+          const desiredLinks = fieldOps.map((op) => op.link);
+          const pruneRes = pruneManagedInverseLinks({
+            frontmatter: fm,
+            field,
+            desiredLinks,
+            containerKind
+          });
+          if (!pruneRes.ok) {
+            this.recordWarning(`${pruneRes.message} (${field})`);
+          } else {
+            changed = changed || pruneRes.changed;
+            if (pruneRes.changed) this.runStats.backlinksRemoved += pruneRes.removedCount;
+          }
+        }
+
         for (const op of ops) {
           const res = addInverseLink({
             frontmatter: fm,
@@ -491,7 +515,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     }
   }
 
-  planBacklinkDirection({ source, sourceField, targetType, targetField, descriptor, planned, dedupe }) {
+  planBacklinkDirection({ source, sourceField, targetType, targetField, descriptor, planned, dedupe, managedFieldsByTarget }) {
     const links = extractLinkTargets(source.frontmatter[sourceField]);
     for (const link of links) {
       const target = this.resolveBacklinkTarget(link, source.file.path, descriptor);
@@ -514,6 +538,8 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       if (dedupe.has(opKey)) continue;
       dedupe.add(opKey);
       if (!planned.has(target.file.path)) planned.set(target.file.path, []);
+      if (!managedFieldsByTarget.has(target.file.path)) managedFieldsByTarget.set(target.file.path, new Set());
+      managedFieldsByTarget.get(target.file.path).add(targetField);
       planned.get(target.file.path).push({
         field: targetField,
         link: sourceLink,
@@ -566,6 +592,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       ? [
           `backlink sync complete`,
           `${stats.backlinksAdded} files updated`,
+          `${stats.backlinksRemoved} links removed`,
           `${stats.warnings.length} warnings`
         ]
       : [
@@ -574,6 +601,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
           `${stats.renamed} renamed`,
           `${stats.moved} moved`,
           `${stats.backlinksAdded} backlink updates`,
+          `${stats.backlinksRemoved} links removed`,
           `${stats.warnings.length} warnings`
         ];
     new Notice(`Mobile Schema Typer: ${parts.join(", ")}`);
@@ -971,6 +999,46 @@ function fieldContainerKind(def, currentValue) {
   return "unknown";
 }
 
+function pruneManagedInverseLinks({ frontmatter, field, desiredLinks, containerKind }) {
+  if (containerKind === "unknown") {
+    return {
+      ok: false,
+      changed: false,
+      removedCount: 0,
+      message: `Cannot infer container type for inverse field '${field}'`
+    };
+  }
+
+  const desiredKeys = new Set(
+    (desiredLinks || []).map((entry) => normalizeTitleKey(parseWikiLinkTarget(entry) || entry)).filter(Boolean)
+  );
+
+  if (containerKind === "array") {
+    const current = Array.isArray(frontmatter[field]) ? frontmatter[field] : extractLinkTargets(frontmatter[field]);
+    const normalized = current.map((entry) => normalizeWikiLinkValue(entry)).filter(Boolean);
+    const kept = [];
+    let removedCount = 0;
+    for (const entry of normalized) {
+      const key = normalizeTitleKey(parseWikiLinkTarget(entry) || entry);
+      if (desiredKeys.has(key)) {
+        kept.push(entry);
+      } else {
+        removedCount += 1;
+      }
+    }
+    const changed = removedCount > 0 || !Array.isArray(frontmatter[field]);
+    if (changed) frontmatter[field] = kept;
+    return { ok: true, changed, removedCount };
+  }
+
+  const existing = normalizeWikiLinkValue(frontmatter[field]);
+  if (!existing) return { ok: true, changed: false, removedCount: 0 };
+  const key = normalizeTitleKey(parseWikiLinkTarget(existing) || existing);
+  if (desiredKeys.has(key)) return { ok: true, changed: false, removedCount: 0 };
+  frontmatter[field] = "";
+  return { ok: true, changed: true, removedCount: 1 };
+}
+
 function addInverseLink({ frontmatter, field, link, containerKind }) {
   if (containerKind === "unknown") {
     return {
@@ -1031,6 +1099,7 @@ function createRunStats() {
     renamed: 0,
     moved: 0,
     backlinksAdded: 0,
+    backlinksRemoved: 0,
     warnings: []
   };
 }
