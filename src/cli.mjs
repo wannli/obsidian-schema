@@ -1865,6 +1865,9 @@ function applySchemaAutofix({ schema, working, fixes, ambiguous, relPath }) {
         fixes.push(`normalized '${key}' to wikilink`);
       }
     }
+
+    // Preserve optional placeholders so users can fill fields incrementally.
+    // Empty optional fields are tolerated by validation and should not be pruned here.
   }
 }
 

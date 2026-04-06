@@ -226,6 +226,9 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
         }
       }
 
+      // Preserve optional placeholders so users can fill fields incrementally.
+      // Empty optional fields should remain present once created.
+
       if (resolved.required.has("type") && !fm.type) {
         fm.type = type || "";
       }
