@@ -110,6 +110,17 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     window.setTimeout(() => this.ensureSchemasFresh(), 300);
   }
 
+  validateSettings() {
+    const next = Object.assign({}, this.settings);
+    next.schemasFolder = this.cleanFolder(next.schemasFolder) || "Schemas";
+    next.archiveFolder = this.cleanFolder(next.archiveFolder) || "Archive";
+    next.debounceMs = Math.max(250, Number(next.debounceMs) || 1200);
+    next.excludedFolders = Array.isArray(next.excludedFolders)
+      ? next.excludedFolders.map((folder) => this.cleanFolder(folder)).filter(Boolean)
+      : DEFAULT_SETTINGS.excludedFolders;
+    this.settings = next;
+  }
+
   handleMarkdownEvent(_eventName, file) {
     if (!file || this.isExcludedPath(file.path) || this.isSelfTouch(file.path)) return;
 
@@ -570,9 +581,11 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.validateSettings();
   }
 
   async saveSettings() {
+    this.validateSettings();
     await this.saveData(this.settings);
   }
 };
@@ -613,8 +626,9 @@ class MobileSchemaTyperSettingTab extends PluginSettingTab {
       .addText((text) =>
         text.setValue(String(this.plugin.settings.debounceMs)).onChange(async (value) => {
           const parsed = Number(value);
-          this.plugin.settings.debounceMs = Number.isFinite(parsed) ? parsed : 1200;
+          this.plugin.settings.debounceMs = Number.isFinite(parsed) ? Math.max(250, parsed) : 1200;
           await this.plugin.saveSettings();
+          this.display();
         })
       );
 
@@ -625,6 +639,7 @@ class MobileSchemaTyperSettingTab extends PluginSettingTab {
         text.setValue(this.plugin.settings.schemasFolder).onChange(async (value) => {
           this.plugin.settings.schemasFolder = value.trim() || "Schemas";
           await this.plugin.saveSettings();
+          this.display();
         })
       );
 
@@ -638,6 +653,7 @@ class MobileSchemaTyperSettingTab extends PluginSettingTab {
             .map((v) => v.trim())
             .filter(Boolean);
           await this.plugin.saveSettings();
+          this.display();
         })
       );
 
@@ -648,6 +664,7 @@ class MobileSchemaTyperSettingTab extends PluginSettingTab {
         text.setValue(this.plugin.settings.archiveFolder).onChange(async (value) => {
           this.plugin.settings.archiveFolder = value.trim() || "Archive";
           await this.plugin.saveSettings();
+          this.display();
         })
       );
 
