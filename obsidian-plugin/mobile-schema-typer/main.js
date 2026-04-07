@@ -398,7 +398,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       replacements.push({
         lineStart: candidate.lineStart,
         lineEnd: candidate.lineEnd,
-        newLine: `${candidate.prefix}${buildWikiLinkToFile(result.file)}`
+        newLine: `${candidate.prefix}${buildWikiLinkToBasename(result.file)}`
       });
     }
 
@@ -1295,6 +1295,10 @@ function buildWikiLinkToFile(file) {
   return `[[${withoutExt}]]`;
 }
 
+function buildWikiLinkToBasename(file) {
+  return `[[${String(file?.basename || "").trim()}]]`;
+}
+
 function findInlineTypeCandidates(text, knownTypes) {
   const source = String(text || "");
   const lines = source.split("\n");
@@ -1345,6 +1349,7 @@ module.exports._test = {
   addInverseLink,
   pruneManagedInverseLinks,
   buildWikiLinkToFile,
+  buildWikiLinkToBasename,
   findInlineTypeCandidates,
   applyInlineTypeReplacements,
   sanitizeNoteTitle,

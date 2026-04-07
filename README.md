@@ -201,8 +201,8 @@ Example:
 becomes:
 
 ```md
-- [[People/Jane Doe]]
-- [ ] [[Entities/Security Council]]
+- [[Jane Doe]]
+- [ ] [[Security Council]]
 ```
 
 Current constraints:

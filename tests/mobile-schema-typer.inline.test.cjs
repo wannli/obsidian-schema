@@ -130,7 +130,7 @@ test('expandInlineTypesInFile creates typed notes and replaces shorthand with li
   assert.equal(summary.reused, 0);
 
   const updated = app._files.get('Inbox/Test.md').content;
-  assert.equal(updated, 'Attendees:\n- [[People/Jane Doe]]\n- [[Entities/Security Council]]\n');
+  assert.equal(updated, 'Attendees:\n- [[Jane Doe]]\n- [[Security Council]]\n');
 
   assert.equal(app._files.has('People/Jane Doe.md'), true);
   assert.equal(app._files.has('Entities/Security Council.md'), true);
@@ -175,5 +175,5 @@ test('expandInlineTypesInFile reuses existing compatible notes and skips conflic
   assert.equal(summary.skipped, 1);
 
   const updated = app._files.get('Inbox/Test.md').content;
-  assert.equal(updated, '- [[People/Jane Doe]]\n- Jane Doe #organ\n');
+  assert.equal(updated, '- [[Jane Doe]]\n- Jane Doe #organ\n');
 });

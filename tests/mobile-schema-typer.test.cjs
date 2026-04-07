@@ -10,6 +10,7 @@ const {
   addInverseLink,
   pruneManagedInverseLinks,
   buildWikiLinkToFile,
+  buildWikiLinkToBasename,
   findInlineTypeCandidates,
   applyInlineTypeReplacements,
   sanitizeNoteTitle,
@@ -103,6 +104,11 @@ test('pruneManagedInverseLinks removes stale array backlinks when enabled by cal
 test('buildWikiLinkToFile uses vault-relative path without extension', () => {
   assert.equal(buildWikiLinkToFile({ path: 'Projects/Test Note.md', basename: 'Test Note' }), '[[Projects/Test Note]]');
   assert.equal(buildWikiLinkToFile({ path: '', basename: 'Loose' }), '[[Loose]]');
+});
+
+test('buildWikiLinkToBasename uses title-only wikilinks', () => {
+  assert.equal(buildWikiLinkToBasename({ path: 'Projects/Test Note.md', basename: 'Test Note' }), '[[Test Note]]');
+  assert.equal(buildWikiLinkToBasename({ basename: 'Loose' }), '[[Loose]]');
 });
 
 test('findInlineTypeCandidates matches supported list-item shorthand', () => {
