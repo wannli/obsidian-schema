@@ -77,6 +77,11 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
 
     await this.ensureSchemasFresh();
     new Notice(`MST loaded (${this.schemas.size} schemas)`);
+    window.setTimeout(async () => {
+      this.schemasDirty = true;
+      await this.ensureSchemasFresh();
+      new Notice(`MST delayed refresh (${this.schemas.size} schemas)`);
+    }, 1500);
 
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
@@ -228,9 +233,13 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
 
   async refreshSchemas() {
     const schemaRoot = this.cleanFolder(this.settings.schemasFolder);
-    const files = this.app.vault
-      .getMarkdownFiles()
+    const allMarkdownFiles = this.app.vault.getMarkdownFiles();
+    const files = allMarkdownFiles
       .filter((f) => this.normalizeVaultPath(f.path).startsWith(`${schemaRoot}/`));
+
+    if (this.settings.verboseLogging) {
+      new Notice(`MST refresh: ${allMarkdownFiles.length} markdown, ${files.length} schema candidates in ${schemaRoot}`);
+    }
 
     const nextSchemas = new Map();
     const nextFolderTypeMap = new Map();
@@ -238,9 +247,15 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     for (const file of files) {
       const text = await this.app.vault.cachedRead(file);
       const fm = parseFrontmatter(text);
-      if (!fm) continue;
+      if (!fm) {
+        if (this.settings.verboseLogging) new Notice(`MST skipped schema (no frontmatter): ${file.path}`);
+        continue;
+      }
       const inferredType = normalizeTypeKey(file.basename);
-      if (!inferredType) continue;
+      if (!inferredType) {
+        if (this.settings.verboseLogging) new Notice(`MST skipped schema (no inferred type): ${file.path}`);
+        continue;
+      }
       const schema = parseSchemaFrontmatter(fm, { type: inferredType });
       const frontmatterType = normalizeTypeKey(fm.type);
       if (frontmatterType && frontmatterType !== inferredType) {
@@ -252,6 +267,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       schema.type = schemaKey;
       schema.extends = normalizeTypeKey(schema.extends);
       nextSchemas.set(schemaKey, schema);
+      if (this.settings.verboseLogging) new Notice(`MST loaded schema: ${schemaKey}`);
       if (schema.folder) {
         const folderKey = this.cleanFolder(schema.folder);
         if (folderKey) nextFolderTypeMap.set(folderKey, schemaKey);
