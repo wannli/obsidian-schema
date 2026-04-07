@@ -65,6 +65,23 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "mobile-schema-typer-expand-inline-types-current-file",
+      name: "Expand inline #type entries in current file",
+      callback: async () => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension !== "md") {
+          new Notice("No active markdown file");
+          return;
+        }
+        await this.ensureSchemasFresh();
+        const summary = await this.expandInlineTypesInFile(file);
+        new Notice(
+          `Mobile Schema Typer: inline expanded ${summary.replaced}, created ${summary.created}, reused ${summary.reused}, skipped ${summary.skipped}`
+        );
+      }
+    });
+
+    this.addCommand({
       id: "mobile-schema-typer-preview-run",
       name: "Preview schema fix summary",
       callback: async () => {
@@ -355,6 +372,84 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     return merged;
   }
 
+  async expandInlineTypesInFile(file) {
+    const text = await this.app.vault.cachedRead(file);
+    const candidates = findInlineTypeCandidates(text, new Set(this.schemas.keys()));
+    const summary = { candidates: candidates.length, replaced: 0, created: 0, reused: 0, skipped: 0, warnings: [] };
+    if (candidates.length === 0) return summary;
+
+    const replacements = [];
+    const cache = new Map();
+    for (const candidate of candidates) {
+      const cacheKey = `${candidate.normalizedType}::${normalizeTitleKey(candidate.title)}`;
+      let result = cache.get(cacheKey);
+      if (!result) {
+        result = await this.ensureTypedNoteForTitle(candidate.title, candidate.normalizedType);
+        cache.set(cacheKey, result);
+      }
+      if (!result || !result.file) {
+        summary.skipped += 1;
+        if (result?.warning) summary.warnings.push(result.warning);
+        continue;
+      }
+      if (result.created) summary.created += 1;
+      else summary.reused += 1;
+      summary.replaced += 1;
+      replacements.push({
+        lineStart: candidate.lineStart,
+        lineEnd: candidate.lineEnd,
+        newLine: `${candidate.prefix}${buildWikiLinkToFile(result.file)}`
+      });
+    }
+
+    const nextText = applyInlineTypeReplacements(text, replacements);
+    if (nextText !== text) {
+      await this.app.vault.modify(file, nextText);
+      this.markSelfTouch(file.path);
+    }
+    return summary;
+  }
+
+  async ensureTypedNoteForTitle(title, type) {
+    const schema = this.resolveSchema(type);
+    if (!schema) return { file: null, created: false, warning: `Unknown schema type: ${type}` };
+
+    const cleanTitle = sanitizeNoteTitle(title);
+    if (!cleanTitle) return { file: null, created: false, warning: `Invalid title for type ${type}` };
+
+    const schemaFolder = this.cleanFolder(schema.folder || "");
+    const preferredPath = schemaFolder ? normalizePath(`${schemaFolder}/${cleanTitle}.md`) : `${cleanTitle}.md`;
+    let file = this.app.vault.getAbstractFileByPath(preferredPath);
+    let created = false;
+
+    if (!file) file = this.findExistingNoteByTitle(cleanTitle);
+
+    if (file) {
+      const fm = (await this.readFreshFrontmatterForFile(file)) || {};
+      const existingType = normalizeTypeKey(fm.type || this.inferType(file));
+      if (existingType && existingType !== type) {
+        return {
+          file: null,
+          created: false,
+          warning: `Existing note '${file.path}' has type '${existingType}', not '${type}'`
+        };
+      }
+    } else {
+      if (schemaFolder) await this.app.vault.createFolder(schemaFolder).catch(() => {});
+      file = await this.app.vault.create(preferredPath, `---\ntype: ${type}\n---\n`);
+      created = true;
+    }
+
+    const finalFile = (await this.applySchemaToFile(file)) || this.app.vault.getAbstractFileByPath(file.path) || file;
+    return { file: finalFile, created, warning: null };
+  }
+
+  findExistingNoteByTitle(title) {
+    const wanted = normalizeTitleKey(title);
+    if (!wanted) return null;
+    return this.app.vault.getMarkdownFiles().find((file) => normalizeTitleKey(file.basename) === wanted) || null;
+  }
+
   async applySchemaToFile(file) {
     if (this.settings.verboseLogging) console.log(`[mobile-schema-typer] apply ${file.path}`);
     const text = await this.app.vault.cachedRead(file);
@@ -379,7 +474,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     }
 
     const resolved = this.resolveSchema(type);
-    if (!resolved) return;
+    if (!resolved) return file;
 
     for (const [field, def] of resolved.fields.entries()) {
       const hasField = Object.prototype.hasOwnProperty.call(fm, field);
@@ -410,7 +505,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     }
 
     const latest = this.app.vault.getAbstractFileByPath(file.path) || file;
-    if (!latest || !latest.path) return;
+    if (!latest || !latest.path) return file;
     let currentFile = latest;
 
     if (this.settings.enableDatePrefixRename && resolved.prependDateToTitle) {
@@ -441,9 +536,12 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
           await this.app.fileManager.renameFile(currentFile, targetPath);
           this.markSelfTouch(targetPath);
           this.runStats.moved += 1;
+          currentFile = this.app.vault.getAbstractFileByPath(targetPath) || currentFile;
         }
       }
     }
+
+    return currentFile;
   }
 
   targetFolderForNote(frontmatter, resolvedSchema) {
@@ -1197,6 +1295,48 @@ function buildWikiLinkToFile(file) {
   return `[[${withoutExt}]]`;
 }
 
+function findInlineTypeCandidates(text, knownTypes) {
+  const source = String(text || "");
+  const lines = source.split("\n");
+  const results = [];
+  let offset = 0;
+  for (const line of lines) {
+    const match = line.match(/^(\s*(?:[-*+]\s+|\d+\.\s+)(?:\[[ xX]\]\s+)?)((?:\[\[(?!.*#)[^\]]+\]\]|[^#])+?)\s+#([A-Za-z0-9_-]+)\s*$/);
+    if (match && !line.includes("[[")) {
+      const prefix = match[1] || "";
+      const title = String(match[2] || "").trim();
+      const normalizedType = normalizeTypeKey(match[3]);
+      if (title && normalizedType && knownTypes && knownTypes.has(normalizedType)) {
+        results.push({
+          lineStart: offset,
+          lineEnd: offset + line.length,
+          lineText: line,
+          prefix,
+          title,
+          type: match[3],
+          normalizedType
+        });
+      }
+    }
+    offset += line.length + 1;
+  }
+  return results;
+}
+
+function applyInlineTypeReplacements(text, replacements) {
+  if (!Array.isArray(replacements) || replacements.length === 0) return String(text || "");
+  const ordered = [...replacements].sort((a, b) => b.lineStart - a.lineStart);
+  let next = String(text || "");
+  for (const replacement of ordered) {
+    next = `${next.slice(0, replacement.lineStart)}${replacement.newLine}${next.slice(replacement.lineEnd)}`;
+  }
+  return next;
+}
+
+function sanitizeNoteTitle(title) {
+  return String(title || "").replace(/[\\/:*?"<>|#^\[\]]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
 module.exports._test = {
   parseSchemaFrontmatter,
   normalizeTypeKey,
@@ -1205,6 +1345,9 @@ module.exports._test = {
   addInverseLink,
   pruneManagedInverseLinks,
   buildWikiLinkToFile,
+  findInlineTypeCandidates,
+  applyInlineTypeReplacements,
+  sanitizeNoteTitle,
   extractDatePrefix,
   createRunStats,
   parseFrontmatter,

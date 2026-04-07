@@ -10,6 +10,9 @@ const {
   addInverseLink,
   pruneManagedInverseLinks,
   buildWikiLinkToFile,
+  findInlineTypeCandidates,
+  applyInlineTypeReplacements,
+  sanitizeNoteTitle,
   extractDatePrefix,
   createRunStats
 } = loadPluginHelpers();
@@ -100,6 +103,41 @@ test('pruneManagedInverseLinks removes stale array backlinks when enabled by cal
 test('buildWikiLinkToFile uses vault-relative path without extension', () => {
   assert.equal(buildWikiLinkToFile({ path: 'Projects/Test Note.md', basename: 'Test Note' }), '[[Projects/Test Note]]');
   assert.equal(buildWikiLinkToFile({ path: '', basename: 'Loose' }), '[[Loose]]');
+});
+
+test('findInlineTypeCandidates matches supported list-item shorthand', () => {
+  const text = [
+    '- Jane Doe #delegate',
+    '- [ ] Security Council #organ',
+    '1. Informal consultations #meeting',
+    'Paragraph mention #delegate',
+    '- Already linked [[Jane Doe]] #delegate'
+  ].join('\n');
+  const matches = findInlineTypeCandidates(text, new Set(['delegate', 'organ', 'meeting']));
+
+  assert.equal(matches.length, 3);
+  assert.equal(matches[0].prefix, '- ');
+  assert.equal(matches[0].title, 'Jane Doe');
+  assert.equal(matches[0].normalizedType, 'delegate');
+  assert.equal(matches[1].prefix, '- [ ] ');
+  assert.equal(matches[1].title, 'Security Council');
+  assert.equal(matches[2].prefix, '1. ');
+  assert.equal(matches[2].title, 'Informal consultations');
+});
+
+test('applyInlineTypeReplacements swaps matched list lines', () => {
+  const text = '- Jane Doe #delegate\n- [ ] Security Council #organ\n';
+  const matches = findInlineTypeCandidates(text, new Set(['delegate', 'organ']));
+  const replaced = applyInlineTypeReplacements(text, [
+    { lineStart: matches[0].lineStart, lineEnd: matches[0].lineEnd, newLine: '- [[People/Jane Doe]]' },
+    { lineStart: matches[1].lineStart, lineEnd: matches[1].lineEnd, newLine: '- [ ] [[Entities/Security Council]]' }
+  ]);
+
+  assert.equal(replaced, '- [[People/Jane Doe]]\n- [ ] [[Entities/Security Council]]\n');
+});
+
+test('sanitizeNoteTitle removes invalid path characters', () => {
+  assert.equal(sanitizeNoteTitle('Jane / Doe: delegate?'), 'Jane Doe delegate');
 });
 
 test('extractDatePrefix normalizes date-like inputs', () => {

@@ -172,10 +172,45 @@ Behavior:
 - Leaves conflicting scalar inverse links untouched and records a warning.
 - Can reconcile managed inverse backlinks when backlink pruning is enabled.
 - Tracks warnings during runs and shows a summary notice for manual commands.
-- Supports manual commands for full run, current file, backlink rebuild, and preview.
+- Supports manual commands for full run, current file, backlink rebuild, inline `#type` expansion in the current file, and preview.
 - Validates and normalizes plugin settings before save/use.
 - Waits for schemas to become available before processing ordinary note events.
 - Performs a delayed schema refresh after startup because Obsidian may initially report zero markdown files.
+
+### Inline `#type` expansion
+
+The plugin includes a manual command:
+
+- `Expand inline #type entries in current file`
+
+Phase 1 behavior:
+
+- scans the active markdown file for list items ending in a known schema hashtag like `#delegate` or `#organ`
+- supports unordered lists, ordered lists, and task list items
+- creates or reuses a note for the referenced title
+- applies normal schema processing to that note
+- replaces the shorthand with a wikilink to the final note path
+
+Example:
+
+```md
+- Jane Doe #delegate
+- [ ] Security Council #organ
+```
+
+becomes:
+
+```md
+- [[People/Jane Doe]]
+- [ ] [[Entities/Security Council]]
+```
+
+Current constraints:
+
+- manual command only
+- list items only
+- exact title matching only
+- conflicting existing note types are skipped rather than rewritten automatically
 
 Install:
 
@@ -195,6 +230,7 @@ Install:
    - `Run schema fix now`
    - `Run schema fix on current file`
    - `Rebuild backlinks now`
+   - `Expand inline #type entries in current file`
    - `Preview schema fix summary`
 
 Notes:
@@ -205,6 +241,8 @@ Notes:
 - excluded folders and `.obsidian/` are ignored during scans
 - on startup, Obsidian may temporarily report zero markdown files; the plugin compensates with a delayed schema refresh
 - if schema-driven behavior seems missing immediately after startup, wait a moment for schema readiness
+- inline `#type` expansion is currently manual-command only and limited to list items
+- conflicting existing note types are skipped during inline expansion rather than rewritten automatically
 
 ## Learnings / Known Pitfalls
 
