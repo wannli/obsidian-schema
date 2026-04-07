@@ -31,11 +31,10 @@ CLI command roles:
 
 ## Schema Format
 
-Schemas are markdown files in your vault at `Schemas/*.md`, using Obsidian frontmatter properties.
+Schemas are markdown files in your vault at `Schemas/*.md`, using Obsidian frontmatter properties. The schema type is inferred from the schema filename.
 
 ```md
 ---
-type: meeting
 extends: [[log]]
 folder: /Meetings
 purpose: Meeting notes
@@ -49,7 +48,8 @@ prependDateToTitle: true
 
 Rules:
 
-- `type` identifies the schema.
+- The schema filename is the schema type source of truth. For example, `Schemas/delegate.md` defines type `delegate`.
+- `type` inside schema frontmatter is optional legacy metadata. If present and it disagrees with the filename, the plugin warns and uses the filename-derived type.
 - `extends` inherits another schema and uses a simple wikilink (`[[entity]]`).
 - `folder` is the canonical folder for that type.
 - `field.<name>*` marks required fields (example: `field.date*:`).

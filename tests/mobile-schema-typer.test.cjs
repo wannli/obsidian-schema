@@ -28,9 +28,9 @@ test('parseSchemaFrontmatter supports required fields, defaults, and pairs', () 
     'default.attendees': ['Alice'],
     'pair.project': 'project.meetings',
     prependDateToTitle: true
-  });
+  }, { type: 'meeting' });
 
-  assert.equal(schema.type, 'Meeting');
+  assert.equal(schema.type, 'meeting');
   assert.equal(schema.extends, 'log');
   assert.equal(schema.folder, 'Meetings');
   assert.equal(schema.prependDateToTitle, true);

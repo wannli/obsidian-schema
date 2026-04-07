@@ -231,10 +231,17 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
 
     for (const file of files) {
       const fm = this.readFrontmatterForFile(file);
-      if (!fm || typeof fm.type !== "string" || !fm.type.trim()) continue;
-      const schema = parseSchemaFrontmatter(fm);
-      const schemaKey = normalizeTypeKey(schema.type);
-      if (!schemaKey) continue;
+      if (!fm) continue;
+      const inferredType = normalizeTypeKey(file.basename);
+      if (!inferredType) continue;
+      const schema = parseSchemaFrontmatter(fm, { type: inferredType });
+      const frontmatterType = normalizeTypeKey(fm.type);
+      if (frontmatterType && frontmatterType !== inferredType) {
+        this.recordWarning(
+          `Schema file '${file.path}' declares type '${frontmatterType}' but filename implies '${inferredType}'`
+        );
+      }
+      const schemaKey = inferredType;
       schema.type = schemaKey;
       schema.extends = normalizeTypeKey(schema.extends);
       nextSchemas.set(schemaKey, schema);
@@ -781,7 +788,7 @@ function parseScalar(value) {
   return v;
 }
 
-function parseSchemaFrontmatter(fm) {
+function parseSchemaFrontmatter(fm, options = {}) {
   const reserved = new Set(["type", "extends", "folder", "purpose", "prependDateToTitle"]);
   const required = new Set(["type"]);
   const fields = new Map();
@@ -858,7 +865,7 @@ function parseSchemaFrontmatter(fm) {
   }
 
   return {
-    type: String(fm.type || "").trim(),
+    type: String(options.type || fm.type || "").trim(),
     extends: parseSimpleWikiLinkRef(fm.extends),
     folder: String(fm.folder || "").trim().replace(/^\/+|\/+$/g, "") || null,
     prependDateToTitle: parseOptionalBool(fm.prependDateToTitle),
