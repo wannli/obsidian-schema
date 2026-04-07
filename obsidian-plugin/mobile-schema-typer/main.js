@@ -1,6 +1,7 @@
 const { Plugin, PluginSettingTab, Setting, Notice, normalizePath } = require("obsidian");
 
 const TERMINAL_STATUSES = new Set(["done", "superseded", "cancelled"]);
+const DEBUG_BUILD = "2026-04-07-debug-1";
 
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -76,12 +77,12 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     });
 
     await this.ensureSchemasFresh();
-    new Notice(`MST loaded (${this.schemas.size} schemas)`);
+    new Notice(`MST ${DEBUG_BUILD} loaded (${this.schemas.size} schemas)`);
     window.setTimeout(async () => {
       this.schemasDirty = true;
       await this.ensureSchemasFresh();
-      console.debug(`[mobile-schema-typer] delayed refresh -> ${this.schemas.size} schemas`);
-      new Notice(`MST delayed refresh (${this.schemas.size} schemas)`);
+      console.debug(`[mobile-schema-typer] ${DEBUG_BUILD} delayed refresh -> ${this.schemas.size} schemas`);
+      new Notice(`MST ${DEBUG_BUILD} delayed refresh (${this.schemas.size} schemas)`);
     }, 1500);
 
     this.registerEvent(
