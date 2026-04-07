@@ -78,7 +78,7 @@ Behavior:
 
 - Sync is symmetric: either side can add the missing inverse link.
 - Sync is conservative for non-managed values: conflicting scalar values are left untouched and reported.
-- Managed inverse links are reconciled on each run: stale links in the configured inverse field are removed when they are no longer implied by current source links.
+- Managed inverse links can be reconciled on each run: stale links in the configured inverse field are removed when they are no longer implied by current source links, if backlink pruning is enabled.
 - Link resolution uses Obsidian's native link resolution rules rather than basename-only matching.
 
 ## What `fix` Does
@@ -130,7 +130,7 @@ Behavior:
 - Overrides folder to `Archive` when `status` is `done`, `superseded`, or `cancelled`.
 - Uses metadata-cache frontmatter reads for better Obsidian compatibility.
 - Resolves backlink targets with Obsidian link APIs.
-- Reconciles managed inverse backlinks and reports warnings during manual runs.
+- Can reconcile managed inverse backlinks and reports warnings during manual runs.
 - Supports manual commands for full run, current file, backlink rebuild, and preview.
 
 Install:
@@ -138,7 +138,8 @@ Install:
 1. Copy `mobile-schema-typer` into `<vault>/.obsidian/plugins/mobile-schema-typer`.
 2. Enable the plugin in Community Plugins.
 3. Optionally configure debounce/exclusions/folders in plugin settings.
-4. Use the command palette for:
+4. Optionally enable backlink pruning if you want inverse fields to be fully managed.
+5. Use the command palette for:
    - `Run schema fix now`
    - `Run schema fix on current file`
    - `Rebuild backlinks now`

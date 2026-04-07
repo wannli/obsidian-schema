@@ -10,7 +10,8 @@ const DEFAULT_SETTINGS = {
   excludedFolders: ["Attachments", "Schemas", "Templates"],
   archiveFolder: "Archive",
   enableDatePrefixRename: false,
-  verboseLogging: false
+  verboseLogging: false,
+  pruneManagedBacklinks: false
 };
 
 module.exports = class MobileSchemaTyperPlugin extends Plugin {
@@ -118,6 +119,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     next.excludedFolders = Array.isArray(next.excludedFolders)
       ? next.excludedFolders.map((folder) => this.cleanFolder(folder)).filter(Boolean)
       : DEFAULT_SETTINGS.excludedFolders;
+    next.pruneManagedBacklinks = Boolean(next.pruneManagedBacklinks);
     this.settings = next;
   }
 
@@ -474,23 +476,25 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       const managedFields = managedFieldsByTarget.get(targetPath) || new Set();
       const targetNote = notes.find((note) => note.file.path === targetPath);
       await this.app.fileManager.processFrontMatter(targetFile, (fm) => {
-        for (const field of managedFields) {
-          const fieldOps = ops.filter((op) => op.field === field);
-          const schemaDef = targetNote?.schema?.fields?.get(field);
-          const currentValue = fm[field];
-          const containerKind = fieldContainerKind(schemaDef, currentValue);
-          const desiredLinks = fieldOps.map((op) => op.link);
-          const pruneRes = pruneManagedInverseLinks({
-            frontmatter: fm,
-            field,
-            desiredLinks,
-            containerKind
-          });
-          if (!pruneRes.ok) {
-            this.recordWarning(`${pruneRes.message} (${field})`);
-          } else {
-            changed = changed || pruneRes.changed;
-            if (pruneRes.changed) this.runStats.backlinksRemoved += pruneRes.removedCount;
+        if (this.settings.pruneManagedBacklinks) {
+          for (const field of managedFields) {
+            const fieldOps = ops.filter((op) => op.field === field);
+            const schemaDef = targetNote?.schema?.fields?.get(field);
+            const currentValue = fm[field];
+            const containerKind = fieldContainerKind(schemaDef, currentValue);
+            const desiredLinks = fieldOps.map((op) => op.link);
+            const pruneRes = pruneManagedInverseLinks({
+              frontmatter: fm,
+              field,
+              desiredLinks,
+              containerKind
+            });
+            if (!pruneRes.ok) {
+              this.recordWarning(`${pruneRes.message} (${field})`);
+            } else {
+              changed = changed || pruneRes.changed;
+              if (pruneRes.changed) this.runStats.backlinksRemoved += pruneRes.removedCount;
+            }
           }
         }
 
@@ -712,6 +716,16 @@ class MobileSchemaTyperSettingTab extends PluginSettingTab {
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.verboseLogging).onChange(async (value) => {
           this.plugin.settings.verboseLogging = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Prune managed backlinks")
+      .setDesc("Remove stale inverse links from fields managed by pair rules. Off by default for safety.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.pruneManagedBacklinks).onChange(async (value) => {
+          this.plugin.settings.pruneManagedBacklinks = value;
           await this.plugin.saveSettings();
         })
       );
