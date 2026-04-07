@@ -1,7 +1,6 @@
 const { Plugin, PluginSettingTab, Setting, Notice, normalizePath } = require("obsidian");
 
 const TERMINAL_STATUSES = new Set(["done", "superseded", "cancelled"]);
-const DEBUG_BUILD = "2026-04-07-debug-1";
 
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -29,6 +28,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     this.selfTouchedUntil = new Map();
     this.lastRunMode = "background";
     this.runStats = createRunStats();
+    this.schemasReady = false;
 
     this.addSettingTab(new MobileSchemaTyperSettingTab(this.app, this));
     this.addCommand({
@@ -75,11 +75,11 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     });
 
     await this.ensureSchemasFresh();
-    console.log(`[mobile-schema-typer] ${DEBUG_BUILD} loaded -> ${this.schemas.size} schemas`);
     window.setTimeout(async () => {
       this.schemasDirty = true;
+      const wasReady = this.schemasReady;
       await this.ensureSchemasFresh();
-      console.log(`[mobile-schema-typer] ${DEBUG_BUILD} delayed refresh -> ${this.schemas.size} schemas`);
+      if (!wasReady && this.schemasReady) this.scheduleRun({ full: true });
     }, 1500);
 
     this.registerEvent(
@@ -135,6 +135,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
   handleMarkdownEvent(_eventName, file) {
     if (this.settings.verboseLogging) console.log(`[mobile-schema-typer] event ${_eventName}: ${file?.path || "unknown"}`);
     if (!file || this.isExcludedPath(file.path) || this.isSelfTouch(file.path)) return;
+    if (!this.schemasReady && !this.isSchemaFile(file.path)) return;
 
     if (this.isSchemaFile(file.path)) {
       this.scheduleSchemaRefresh();
@@ -238,12 +239,6 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
 
     if (this.settings.verboseLogging) {
       console.log(`[mobile-schema-typer] refreshSchemas root=${schemaRoot} markdown=${allMarkdownFiles.length} candidates=${files.length}`);
-      console.log(
-        `[mobile-schema-typer] first markdown paths: ${allMarkdownFiles.slice(0, 10).map((f) => f.path).join(' | ')}`
-      );
-      console.log(
-        `[mobile-schema-typer] schema candidate paths: ${files.slice(0, 20).map((f) => f.path).join(' | ')}`
-      );
     }
 
     const nextSchemas = new Map();
@@ -252,15 +247,9 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     for (const file of files) {
       const text = await this.app.vault.cachedRead(file);
       const fm = parseFrontmatter(text);
-      if (!fm) {
-        if (this.settings.verboseLogging) console.log(`[mobile-schema-typer] skipped schema (no frontmatter): ${file.path}`);
-        continue;
-      }
+      if (!fm) continue;
       const inferredType = normalizeTypeKey(file.basename);
-      if (!inferredType) {
-        if (this.settings.verboseLogging) console.log(`[mobile-schema-typer] skipped schema (no inferred type): ${file.path}`);
-        continue;
-      }
+      if (!inferredType) continue;
       const schema = parseSchemaFrontmatter(fm, { type: inferredType });
       const frontmatterType = normalizeTypeKey(fm.type);
       if (frontmatterType && frontmatterType !== inferredType) {
@@ -272,7 +261,6 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       schema.type = schemaKey;
       schema.extends = normalizeTypeKey(schema.extends);
       nextSchemas.set(schemaKey, schema);
-      if (this.settings.verboseLogging) console.log(`[mobile-schema-typer] loaded schema: ${schemaKey} from ${file.path}`);
       if (schema.folder) {
         const folderKey = this.cleanFolder(schema.folder);
         if (folderKey) nextFolderTypeMap.set(folderKey, schemaKey);
@@ -282,6 +270,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     this.schemas = nextSchemas;
     this.folderTypeMap = nextFolderTypeMap;
     this.schemasDirty = false;
+    this.schemasReady = this.schemas.size > 0;
     if (this.settings.verboseLogging) console.log(`[mobile-schema-typer] schemas refreshed: ${this.schemas.size}`);
   }
 
