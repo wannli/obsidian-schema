@@ -163,7 +163,7 @@ Behavior:
 - Prepends `YYYY-MM-DD ` to note title when schema has `prependDateToTitle: true` and a usable `date` exists.
 - Moves notes to schema `folder`.
 - Overrides folder to `Archive` when `status` is `done`, `superseded`, or `cancelled`.
-- Uses metadata-cache frontmatter reads for better Obsidian compatibility.
+- Uses direct file reads for schema loading and note application in the critical path.
 - Refreshes schema cache when schema notes are modified, created, renamed, or deleted.
 - Uses targeted runs for changed files and full runs for explicit/manual or schema-wide refresh cases.
 - Resolves backlink targets with Obsidian link APIs.
@@ -174,6 +174,8 @@ Behavior:
 - Tracks warnings during runs and shows a summary notice for manual commands.
 - Supports manual commands for full run, current file, backlink rebuild, and preview.
 - Validates and normalizes plugin settings before save/use.
+- Waits for schemas to become available before processing ordinary note events.
+- Performs a delayed schema refresh after startup because Obsidian may initially report zero markdown files.
 
 Install:
 
@@ -201,6 +203,23 @@ Notes:
 - schema application is post-modify, not true pre-save interception
 - pruning inverse backlinks is opt-in and off by default for safety
 - excluded folders and `.obsidian/` are ignored during scans
+- on startup, Obsidian may temporarily report zero markdown files; the plugin compensates with a delayed schema refresh
+- if schema-driven behavior seems missing immediately after startup, wait a moment for schema readiness
+
+## Learnings / Known Pitfalls
+
+These issues were encountered during development and are now part of the intended operating model:
+
+- **Schema filename is canonical.** `Schemas/delegate.md` defines schema `delegate`. Redundant `type:` keys inside schema frontmatter can drift and should be avoided.
+- **Schema `extends` should reference schema IDs, not schema file paths.** Use `[[meeting]]`, not `[[Schemas/meeting]]`.
+- **The mobile plugin and CLI must follow the same schema-ID convention.** Both now infer schema IDs from schema filenames.
+- **Obsidian startup is racy.** The mobile plugin may initially see `0` markdown files even though the vault is populated. A delayed schema refresh is required.
+- **Do not process normal note events before schemas are ready.** Otherwise saves can happen against an empty schema set and appear to do nothing.
+- **Direct file reads are more reliable than metadata cache for startup and just-saved content in the critical path.**
+- **Scalar inverse fields cause backlink conflicts for multi-valued relationships.** Use `[]` for fields like `organ.processes` and `organ.intergovs` when multiple links are expected.
+- **Preserved optional placeholders can accumulate stale schema-specific fields.** Example: non-country notes kept a stray `capital:` field until cleaned up.
+- **Schema issue reports can reflect bad historical note data, not only schema bugs.** Check the affected note frontmatter before assuming schema matching is wrong.
+- **Symlinked plugin development works, but runtime verification is still necessary.** Explicit load markers and console logs were useful to confirm the latest code was actually running.
 
 ## Testing
 
