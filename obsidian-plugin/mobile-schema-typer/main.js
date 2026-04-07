@@ -33,7 +33,10 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     this.addCommand({
       id: "mobile-schema-typer-run-now",
       name: "Run schema fix now",
-      callback: () => this.scheduleRun({ full: true, mode: "manual" })
+      callback: () => {
+        new Notice("MST command: run schema fix now");
+        this.scheduleRun({ full: true, mode: "manual" });
+      }
     });
 
     this.addCommand({
@@ -45,6 +48,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
           new Notice("No active markdown file");
           return;
         }
+        new Notice(`MST command: current file ${file.path}`);
         this.scheduleRun({ filePath: file.path, mode: "manual" });
       }
     });
@@ -72,6 +76,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     });
 
     await this.ensureSchemasFresh();
+    new Notice(`MST loaded (${this.schemas.size} schemas)`);
 
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
@@ -124,6 +129,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
   }
 
   handleMarkdownEvent(_eventName, file) {
+    if (this.settings.verboseLogging) new Notice(`MST event ${_eventName}: ${file?.path || "unknown"}`);
     if (!file || this.isExcludedPath(file.path) || this.isSelfTouch(file.path)) return;
 
     if (this.isSchemaFile(file.path)) {
@@ -255,6 +261,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     this.schemas = nextSchemas;
     this.folderTypeMap = nextFolderTypeMap;
     this.schemasDirty = false;
+    if (this.settings.verboseLogging) new Notice(`MST schemas refreshed: ${this.schemas.size}`);
   }
 
   async runOnce() {
@@ -339,6 +346,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
   }
 
   async applySchemaToFile(file) {
+    if (this.settings.verboseLogging) new Notice(`MST apply ${file.path}`);
     const text = await this.app.vault.cachedRead(file);
     const parsed = parseMarkdownWithFrontmatter(text);
     const fm = cloneValue(parsed.frontmatter || {});
@@ -385,6 +393,9 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
         await this.app.vault.modify(file, nextText);
         this.markSelfTouch(file.path);
         this.runStats.updated += 1;
+        new Notice(`MST updated ${file.path}`);
+      } else if (this.settings.verboseLogging) {
+        new Notice(`MST no-op ${file.path}`);
       }
     }
 
