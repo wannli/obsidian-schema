@@ -81,7 +81,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     window.setTimeout(async () => {
       this.schemasDirty = true;
       await this.ensureSchemasFresh();
-      console.debug(`[mobile-schema-typer] ${DEBUG_BUILD} delayed refresh -> ${this.schemas.size} schemas`);
+      console.log(`[mobile-schema-typer] ${DEBUG_BUILD} delayed refresh -> ${this.schemas.size} schemas`);
       new Notice(`MST ${DEBUG_BUILD} delayed refresh (${this.schemas.size} schemas)`);
     }, 1500);
 
@@ -240,11 +240,11 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       .filter((f) => this.normalizeVaultPath(f.path).startsWith(`${schemaRoot}/`));
 
     if (this.settings.verboseLogging) {
-      console.debug(`[mobile-schema-typer] refreshSchemas root=${schemaRoot} markdown=${allMarkdownFiles.length} candidates=${files.length}`);
-      console.debug(
+      console.log(`[mobile-schema-typer] refreshSchemas root=${schemaRoot} markdown=${allMarkdownFiles.length} candidates=${files.length}`);
+      console.log(
         `[mobile-schema-typer] first markdown paths: ${allMarkdownFiles.slice(0, 10).map((f) => f.path).join(' | ')}`
       );
-      console.debug(
+      console.log(
         `[mobile-schema-typer] schema candidate paths: ${files.slice(0, 20).map((f) => f.path).join(' | ')}`
       );
     }
@@ -256,12 +256,12 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       const text = await this.app.vault.cachedRead(file);
       const fm = parseFrontmatter(text);
       if (!fm) {
-        if (this.settings.verboseLogging) console.debug(`[mobile-schema-typer] skipped schema (no frontmatter): ${file.path}`);
+        if (this.settings.verboseLogging) console.log(`[mobile-schema-typer] skipped schema (no frontmatter): ${file.path}`);
         continue;
       }
       const inferredType = normalizeTypeKey(file.basename);
       if (!inferredType) {
-        if (this.settings.verboseLogging) console.debug(`[mobile-schema-typer] skipped schema (no inferred type): ${file.path}`);
+        if (this.settings.verboseLogging) console.log(`[mobile-schema-typer] skipped schema (no inferred type): ${file.path}`);
         continue;
       }
       const schema = parseSchemaFrontmatter(fm, { type: inferredType });
@@ -275,7 +275,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       schema.type = schemaKey;
       schema.extends = normalizeTypeKey(schema.extends);
       nextSchemas.set(schemaKey, schema);
-      if (this.settings.verboseLogging) console.debug(`[mobile-schema-typer] loaded schema: ${schemaKey} from ${file.path}`);
+      if (this.settings.verboseLogging) console.log(`[mobile-schema-typer] loaded schema: ${schemaKey} from ${file.path}`);
       if (schema.folder) {
         const folderKey = this.cleanFolder(schema.folder);
         if (folderKey) nextFolderTypeMap.set(folderKey, schemaKey);
@@ -285,7 +285,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     this.schemas = nextSchemas;
     this.folderTypeMap = nextFolderTypeMap;
     this.schemasDirty = false;
-    if (this.settings.verboseLogging) console.debug(`[mobile-schema-typer] schemas refreshed: ${this.schemas.size}`);
+    if (this.settings.verboseLogging) console.log(`[mobile-schema-typer] schemas refreshed: ${this.schemas.size}`);
   }
 
   async runOnce() {
