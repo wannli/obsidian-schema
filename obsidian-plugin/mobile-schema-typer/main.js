@@ -230,7 +230,8 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     const nextFolderTypeMap = new Map();
 
     for (const file of files) {
-      const fm = this.readFrontmatterForFile(file);
+      const text = await this.app.vault.cachedRead(file);
+      const fm = parseFrontmatter(text);
       if (!fm) continue;
       const inferredType = normalizeTypeKey(file.basename);
       if (!inferredType) continue;
@@ -438,10 +439,10 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
     return Boolean(found);
   }
 
-  readFrontmatterForFile(file) {
-    const cache = this.app.metadataCache.getFileCache(file);
-    if (cache?.frontmatter) return cloneValue(cache.frontmatter);
-    return null;
+  async readFreshFrontmatterForFile(file) {
+    if (!file) return null;
+    const text = await this.app.vault.cachedRead(file);
+    return parseFrontmatter(text);
   }
 
   async runBacklinkSync(files) {
@@ -449,7 +450,7 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
 
     for (const file of files) {
       if (!file || file.extension !== "md") continue;
-      const fm = this.readFrontmatterForFile(file) || {};
+      const fm = (await this.readFreshFrontmatterForFile(file)) || {};
       const type = typeof fm.type === "string" ? fm.type.trim() : "";
       const schema = this.resolveSchema(type);
       if (!schema || !Array.isArray(schema.pairRules) || schema.pairRules.length === 0) continue;
@@ -572,7 +573,8 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
       return null;
     }
 
-    const fm = this.readFrontmatterForFile(destination) || {};
+    const cache = this.app.metadataCache.getFileCache(destination);
+    const fm = cache?.frontmatter ? cloneValue(cache.frontmatter) : {};
     const type = typeof fm.type === "string" ? normalizeTypeKey(fm.type) : "";
     const schema = this.resolveSchema(type);
     if (!schema) {
