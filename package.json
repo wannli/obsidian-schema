@@ -11,6 +11,7 @@
     "schema": "node src/cli.mjs",
     "schema:check": "node src/cli.mjs check --vault ~/notes",
     "schema:fix": "node src/cli.mjs fix --vault ~/notes",
-    "schema:fix:dry": "node src/cli.mjs fix --vault ~/notes --dry-run"
+    "schema:fix:dry": "node src/cli.mjs fix --vault ~/notes --dry-run",
+    "test": "node --test tests/*.test.cjs"
   }
 }

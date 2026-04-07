@@ -1125,6 +1125,18 @@ function buildWikiLinkToFile(file) {
   return `[[${withoutExt}]]`;
 }
 
+module.exports._test = {
+  parseSchemaFrontmatter,
+  normalizeTypeKey,
+  typeMatchesOrExtends,
+  fieldContainerKind,
+  addInverseLink,
+  pruneManagedInverseLinks,
+  buildWikiLinkToFile,
+  extractDatePrefix,
+  createRunStats
+};
+
 function extractDatePrefix(dateValue) {
   if (!dateValue) return null;
   if (dateValue instanceof Date && !Number.isNaN(dateValue.getTime())) {
