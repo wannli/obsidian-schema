@@ -339,61 +339,58 @@ module.exports = class MobileSchemaTyperPlugin extends Plugin {
   }
 
   async applySchemaToFile(file) {
-    let nextFrontmatter = null;
+    const text = await this.app.vault.cachedRead(file);
+    const parsed = parseMarkdownWithFrontmatter(text);
+    const fm = cloneValue(parsed.frontmatter || {});
+
+    let type = typeof fm.type === "string" ? fm.type.trim() : "";
     let frontmatterChanged = false;
-    await this.app.fileManager.processFrontMatter(file, (fm) => {
-      let type = typeof fm.type === "string" ? fm.type.trim() : "";
-      if (!type) {
-        const inferred = this.inferType(file);
-        if (inferred) {
-          fm.type = inferred;
-          type = inferred;
-          frontmatterChanged = true;
-        }
-      }
-
-      type = normalizeTypeKey(type);
-      if (type && fm.type !== type) {
-        fm.type = type;
+    if (!type) {
+      const inferred = this.inferType(file);
+      if (inferred) {
+        fm.type = inferred;
+        type = inferred;
         frontmatterChanged = true;
       }
+    }
 
-      const resolved = this.resolveSchema(type);
-      if (!resolved) {
-        nextFrontmatter = cloneValue(fm);
-        return;
-      }
+    type = normalizeTypeKey(type);
+    if (type && fm.type !== type) {
+      fm.type = type;
+      frontmatterChanged = true;
+    }
 
-      for (const [field, def] of resolved.fields.entries()) {
-        const hasField = Object.prototype.hasOwnProperty.call(fm, field);
-        if (!hasField && resolved.required.has(field)) {
-          fm[field] = defaultValueForMissing(def);
-          frontmatterChanged = true;
-        } else if (!hasField && def.defaultDefined) {
-          fm[field] = cloneValue(def.defaultValue);
-          frontmatterChanged = true;
-        }
-      }
-
-      // Preserve optional placeholders so users can fill fields incrementally.
-      // Empty optional fields should remain present once created.
-
-      if (resolved.required.has("type") && !fm.type) {
-        fm.type = type || "";
-        frontmatterChanged = true;
-      }
-      nextFrontmatter = cloneValue(fm);
-    });
-
-    if (frontmatterChanged) this.runStats.updated += 1;
-
-    const latest = this.app.vault.getAbstractFileByPath(file.path) || file;
-    if (!latest || !latest.path || !nextFrontmatter) return;
-    let currentFile = latest;
-    const fm = nextFrontmatter;
-    const type = typeof fm.type === "string" ? normalizeTypeKey(fm.type) : "";
     const resolved = this.resolveSchema(type);
     if (!resolved) return;
+
+    for (const [field, def] of resolved.fields.entries()) {
+      const hasField = Object.prototype.hasOwnProperty.call(fm, field);
+      if (!hasField && resolved.required.has(field)) {
+        fm[field] = defaultValueForMissing(def);
+        frontmatterChanged = true;
+      } else if (!hasField && def.defaultDefined) {
+        fm[field] = cloneValue(def.defaultValue);
+        frontmatterChanged = true;
+      }
+    }
+
+    if (resolved.required.has("type") && !fm.type) {
+      fm.type = type || "";
+      frontmatterChanged = true;
+    }
+
+    if (frontmatterChanged) {
+      const nextText = stringifyMarkdownWithFrontmatter(fm, parsed.body);
+      if (nextText !== text) {
+        await this.app.vault.modify(file, nextText);
+        this.markSelfTouch(file.path);
+        this.runStats.updated += 1;
+      }
+    }
+
+    const latest = this.app.vault.getAbstractFileByPath(file.path) || file;
+    if (!latest || !latest.path) return;
+    let currentFile = latest;
 
     if (this.settings.enableDatePrefixRename && resolved.prependDateToTitle) {
       const datePrefix = extractDatePrefix(fm.date);
@@ -739,6 +736,51 @@ class MobileSchemaTyperSettingTab extends PluginSettingTab {
         })
       );
   }
+}
+
+function parseMarkdownWithFrontmatter(text) {
+  if (!text || !text.startsWith("---\n")) {
+    return { frontmatter: {}, body: text || "" };
+  }
+  const end = text.indexOf("\n---", 4);
+  if (end === -1) {
+    return { frontmatter: {}, body: text || "" };
+  }
+  const frontmatterText = text.slice(0, end + 4);
+  const body = text.slice(end + 4).replace(/^\n/, "");
+  return {
+    frontmatter: parseFrontmatter(frontmatterText) || {},
+    body
+  };
+}
+
+function stringifyMarkdownWithFrontmatter(frontmatter, body = "") {
+  const lines = ["---"];
+  for (const [key, value] of Object.entries(frontmatter || {})) {
+    lines.push(...serializeFrontmatterEntry(key, value));
+  }
+  lines.push("---");
+  if (body) lines.push(body.replace(/^\n+/, ""));
+  return `${lines.join("\n")}\n`;
+}
+
+function serializeFrontmatterEntry(key, value) {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return [`${key}: []`];
+    return [`${key}:`, ...value.map((entry) => `  - ${serializeScalar(entry)}`)];
+  }
+  return [`${key}: ${serializeScalar(value)}`];
+}
+
+function serializeScalar(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return String(value);
+  const str = String(value);
+  if (!str) return "";
+  if (/^\[\[[^\]]+\]\]$/.test(str)) return str;
+  if (/^[A-Za-z0-9_\/-]+$/.test(str)) return str;
+  return JSON.stringify(str);
 }
 
 function parseFrontmatter(text) {
