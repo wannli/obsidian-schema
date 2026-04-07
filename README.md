@@ -1,6 +1,6 @@
 # Obsidian Typer
 
-Local CLI for schema-based typing, autofix, and folder routing in an Obsidian vault.
+Local CLI and Obsidian plugin for schema-based typing, autofix, folder routing, and backlink maintenance in an Obsidian vault.
 
 ## Install
 
@@ -21,6 +21,13 @@ schema fix --vault ~/notes
 ```
 
 Reports are written to `./reports/schema-<mode>-report.json`.
+
+CLI command roles:
+
+- `init-schemas` copies starter schemas into the vault.
+- `check` validates notes against schemas and reports issues without changing files.
+- `fix --dry-run` previews autofix results without writing changes.
+- `fix` applies schema fixes, routing, normalization, and config sync.
 
 ## Schema Format
 
@@ -83,16 +90,23 @@ Behavior:
 
 ## What `fix` Does
 
-- Adds missing required keys (blank if no default).
-- Applies defaults when defined.
-- Validates enums/types and writes issue notes when needed.
-- Normalizes common fields (`tags`, `aliases`, `parent`, `children`, `attendees`).
-- Infers `type` from folder when possible.
-- Moves notes to their schema `folder` when applicable.
-- Applies override routing: `status in {done,superseded,cancelled} -> /Archive`.
-- Prepends `YYYY-MM-DD ` to filename when `prependDateToTitle: true` and `date` exists.
-- Syncs `.obsidian/plugins/auto-note-mover/data.json` to match schema folder rules.
-- Regenerates observability artifacts from current schemas.
+The CLI `fix` command can:
+
+- Add missing required keys.
+- Apply defaults when defined.
+- Preserve optional placeholder fields so they can be filled incrementally later.
+- Validate enums/types and write issue notes when needed.
+- Normalize common fields (`tags`, `aliases`, `parent`, `children`, `attendees`).
+- Normalize wikilink-like fields into consistent wikilink form where applicable.
+- Infer `type` from folder when possible.
+- Resolve schema inheritance chains.
+- Move notes to their schema `folder` when applicable.
+- Apply override routing: `status in {done,superseded,cancelled} -> /Archive`.
+- Prepend `YYYY-MM-DD ` to filename when `prependDateToTitle: true` and `date` exists.
+- Sync inverse/backlink pair fields according to `pair.*` and legacy `linkPair.*` rules.
+- Sync `.obsidian/plugins/auto-note-mover/data.json` to match schema folder rules.
+- Regenerate observability artifacts from current schemas.
+- Emit machine-readable reports into `reports/`.
 
 ## Scope/Exclusions
 
@@ -112,6 +126,21 @@ For centralized, out-of-Obsidian execution, run the CLI on your Mac (manually or
 node /Users/wannli/Code/obsidian-typing/src/cli.mjs fix --vault /Users/wannli/notes --report-dir /Users/wannli/Code/obsidian-typing/reports
 ```
 
+## Auto Note Mover Integration
+
+Auto Note Mover integration is part of the CLI workflow, not the mobile plugin runtime.
+
+What it does:
+
+- derives folder-routing rules from your schemas
+- writes or updates `.obsidian/plugins/auto-note-mover/data.json`
+- keeps Auto Note Mover aligned with schema folder targets
+
+What it does not do:
+
+- the mobile plugin does not call Auto Note Mover directly
+- the mobile plugin moves notes itself using Obsidian file APIs
+
 ## Mobile-Compatible Plugin
 
 For Obsidian mobile (no Node subprocess), this repo also includes:
@@ -122,28 +151,82 @@ For Obsidian mobile (no Node subprocess), this repo also includes:
 Behavior:
 
 - Loads schemas from `Schemas/*.md` in-vault.
-- Applies schema fixes on markdown changes.
+- Normalizes schema type lookup to avoid case-sensitivity mismatches.
+- Resolves schema inheritance chains.
+- Applies schema fixes on markdown changes when `Run on modify` is enabled.
+- Also responds to create, rename, and delete events for markdown files.
 - Adds missing required fields (blank/default).
+- Preserves optional placeholder fields once present.
 - Infers `type` from schema folder mappings when missing.
-- Prepends `YYYY-MM-DD ` to note title when schema has `prependDateToTitle: true`.
+- Checks exact folder matches first, then ancestor folder matches.
+- Applies schema after note edits and manual command runs.
+- Prepends `YYYY-MM-DD ` to note title when schema has `prependDateToTitle: true` and a usable `date` exists.
 - Moves notes to schema `folder`.
 - Overrides folder to `Archive` when `status` is `done`, `superseded`, or `cancelled`.
 - Uses metadata-cache frontmatter reads for better Obsidian compatibility.
+- Refreshes schema cache when schema notes are modified, created, renamed, or deleted.
+- Uses targeted runs for changed files and full runs for explicit/manual or schema-wide refresh cases.
 - Resolves backlink targets with Obsidian link APIs.
-- Can reconcile managed inverse backlinks and reports warnings during manual runs.
+- Writes inverse links using vault-relative wikilinks.
+- Avoids duplicate inverse links.
+- Leaves conflicting scalar inverse links untouched and records a warning.
+- Can reconcile managed inverse backlinks when backlink pruning is enabled.
+- Tracks warnings during runs and shows a summary notice for manual commands.
 - Supports manual commands for full run, current file, backlink rebuild, and preview.
+- Validates and normalizes plugin settings before save/use.
 
 Install:
 
 1. Copy `mobile-schema-typer` into `<vault>/.obsidian/plugins/mobile-schema-typer`.
 2. Enable the plugin in Community Plugins.
-3. Optionally configure debounce/exclusions/folders in plugin settings.
-4. Optionally enable backlink pruning if you want inverse fields to be fully managed.
-5. Use the command palette for:
+3. Configure settings as needed:
+   - `Enabled`
+   - `Run on modify`
+   - `Debounce (ms)`
+   - `Schemas folder`
+   - `Excluded folders`
+   - `Archive folder`
+   - `Enable date prefix rename`
+   - `Verbose logging`
+   - `Prune managed backlinks`
+4. Use the command palette for:
    - `Run schema fix now`
    - `Run schema fix on current file`
    - `Rebuild backlinks now`
    - `Preview schema fix summary`
+
+Notes:
+
+- changing `type` and then saving should trigger schema application if `Run on modify` is enabled
+- schema application is post-modify, not true pre-save interception
+- pruning inverse backlinks is opt-in and off by default for safety
+- excluded folders and `.obsidian/` are ignored during scans
+
+## Testing
+
+Automated tests:
+
+```bash
+cd ~/code/obsidian-typing
+npm test
+```
+
+Current automated coverage includes helper logic for:
+
+- schema parsing
+- link parsing and normalization
+- inverse backlink add/prune helpers
+- type normalization and inheritance checks
+- date prefix extraction
+- run statistics helpers
+
+Recommended manual plugin checks in a disposable vault:
+
+- change `type` on a note and save to confirm schema application
+- create a note in a schema-mapped folder to confirm type inference
+- mark a note `done` to confirm archive routing
+- create a backlink pair and run `Rebuild backlinks now`
+- enable backlink pruning and verify stale managed inverse links are removed
 
 ## Default Starter Schemas
 
