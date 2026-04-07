@@ -858,11 +858,13 @@ async function loadSchemas(schemasDir) {
           schema = parseSimpleYaml(codeBlock.body);
         }
       } else {
-        schema = parseNativeMarkdownSchema(parsedDoc.frontmatter || {}, parsedDoc.body);
+        schema = parseNativeMarkdownSchema(parsedDoc.frontmatter || {}, parsedDoc.body, {
+          fileName: path.basename(file, '.md')
+        });
       }
 
       if (!schema || !schema.id || !schema.properties) {
-        warnings.push(`Invalid schema shape in ${fullPath} (needs id + properties)`);
+        warnings.push(`Invalid schema shape in ${fullPath} (needs filename-derived id + properties)`);
         continue;
       }
 
@@ -959,7 +961,7 @@ function extractFirstSchemaCodeBlock(text) {
   };
 }
 
-function parseNativeMarkdownSchema(frontmatter, body) {
+function parseNativeMarkdownSchema(frontmatter, body, options = {}) {
   const reserved = new Set([
     'id',
     'folder',
@@ -972,7 +974,7 @@ function parseNativeMarkdownSchema(frontmatter, body) {
   const schemaFolder = normalizeSchemaFolder(frontmatter.folder ?? frontmatter.appliesTo);
   const prependDateSetting = parseBoolLike(frontmatter.prependDateToTitle);
   const schema = {
-    id: null,
+    id: normalizeString(options.fileName) || null,
     discriminator: null,
     extends: parseSimpleWikiLink(frontmatter.extends),
     purpose: typeof frontmatter.purpose === 'string' ? frontmatter.purpose.trim() : null,
@@ -1076,9 +1078,12 @@ function parseNativeMarkdownSchema(frontmatter, body) {
     }
   }
 
-  if (!schema.id) {
-    if (typeof frontmatter.id === 'string' && frontmatter.id.trim()) {
-      schema.id = frontmatter.id.trim();
+  if (typeof frontmatter.id === 'string' && frontmatter.id.trim()) {
+    const frontmatterId = normalizeString(frontmatter.id);
+    if (schema.id && frontmatterId && frontmatterId !== schema.id) {
+      // Filename-derived schema id is canonical; keep frontmatter.id only if it matches.
+    } else if (!schema.id) {
+      schema.id = frontmatterId;
     }
   }
   if (!schema.discriminator) {
