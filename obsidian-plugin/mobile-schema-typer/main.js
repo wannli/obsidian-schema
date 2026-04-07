@@ -1134,7 +1134,20 @@ module.exports._test = {
   pruneManagedInverseLinks,
   buildWikiLinkToFile,
   extractDatePrefix,
-  createRunStats
+  createRunStats,
+  parseFrontmatter,
+  parseScalar,
+  parsePairValue,
+  parseLinkPairValue,
+  parseOptionalBool,
+  parseFieldDefinition,
+  fieldDefinitionFromDefault,
+  defaultValueForMissing,
+  normalizeWikiLinkValue,
+  parseWikiLinkTarget,
+  extractLinkTargets,
+  normalizeTitleKey,
+  cloneValue
 };
 
 function extractDatePrefix(dateValue) {
