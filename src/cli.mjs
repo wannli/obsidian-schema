@@ -1951,9 +1951,9 @@ function pickBestSchemaByDiscriminator({ schemas, discriminator, noteValue, fold
     const schemaFolder = typeof schema.folder === 'string' ? schema.folder : null;
     const schemaId = normalizeString(schema.id);
     const valueMatch = Boolean(noteValue && schemaId && noteValue === schemaId);
-    const folderMatch = schemaFolder !== null ? schemaFolder === folder : false;
+    const folderMatch = Boolean(!noteValue && schemaFolder !== null ? schemaFolder === folder : false);
 
-    // Type schema: either value match or folder match.
+    // Type schema: prefer explicit type matching; only use folder matching when the note has no type.
     if (!valueMatch && !folderMatch) continue;
 
     const match = schema.match || {};

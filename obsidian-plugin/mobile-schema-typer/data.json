@@ -3,7 +3,13 @@
   "runOnModify": true,
   "debounceMs": 1200,
   "schemasFolder": "Schemas",
-  "excludedFolders": ["Attachments", "Schemas", "Templates"],
+  "excludedFolders": [
+    "Attachments",
+    "Schemas",
+    "Templates"
+  ],
   "archiveFolder": "Archive",
-  "enableDatePrefixRename": true
+  "enableDatePrefixRename": true,
+  "verboseLogging": false,
+  "pruneManagedBacklinks": false
 }
